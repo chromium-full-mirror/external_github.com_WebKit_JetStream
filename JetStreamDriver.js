@@ -409,6 +409,8 @@ class Driver {
 
     reportError(benchmark)
     {
+        if (!isInBrowser)
+            return;
         for (let id of benchmark.scoreIdentifiers())
             document.getElementById(id).innerHTML = "error";
     }
@@ -542,16 +544,19 @@ class Benchmark {
         return `
             let __benchmark = new Benchmark(${this.iterations});
             let results = [];
+            let benchmarkName = "${this.name}";
+            let startMark = performance.mark(benchmarkName);
             for (let i = 0; i < ${this.iterations}; i++) {
                 if (__benchmark.prepareForNextIteration)
                     __benchmark.prepareForNextIteration();
 
-                let start = Date.now();
+                let start = performance.now();
                 __benchmark.runIteration();
-                let end = Date.now();
+                let end = performance.now();
 
                 results.push(Math.max(1, end - start));
             }
+            performanceMeasure(benchmarkName, startMark);
             if (__benchmark.validate)
                 __benchmark.validate();
             top.currentResolve(results);`;
@@ -588,7 +593,31 @@ class Benchmark {
                 assert(false, "Should not reach here in CLI");
         };
 
-        addScript(`const isInBrowser = ${isInBrowser}; let performance = {now: Date.now.bind(Date)};`);
+        addScript(`
+            const isInBrowser = ${isInBrowser};
+            const isD8 = ${isD8};
+            // Only polyfill with Date.now() if performance.now() is not
+            // available, since the latter is more precise than the former.
+            if (typeof performance === 'undefined') {
+              var performance = {};
+            }
+            if (typeof performance.now === 'undefined') {
+              performance.now = Date.now.bind(Date);
+            }
+            if (typeof performance.mark === 'undefined') {
+              performance.mark = function(){};
+            }
+            if (typeof performance.measure === 'undefined') {
+              performance.measure = function(){};
+            }
+            function performanceMeasure(name, mark) {
+                // D8 does not implement the official web-api
+                if (isD8)
+                    performance.measure(name, mark);
+                else
+                    performance.measure(name, mark.name);
+            }
+        `);
 
         if (!!this.plan.deterministicRandom) {
             addScript(`
