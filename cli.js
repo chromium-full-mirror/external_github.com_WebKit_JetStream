@@ -24,12 +24,40 @@
 */
 
 const isInBrowser = false;
-console = {
-    log: print
+if (typeof console === 'undefined')
+    var console = {}
+if (typeof console.log === 'undefined')
+    console.log = print
+if (typeof console.error === 'undefined')
+    console.error = print
+
+if (typeof performance === 'undefined') {
+    var performance = {};
+}
+if (typeof performance.now === 'undefined') {
+    performance.now = Date.now.bind(Date);
+}
+if (typeof performance.mark === 'undefined') {
+    performance.mark = function (){};
+}
+if (typeof performance.measure === 'undefined') {
+    performance.measure = function (){};
 }
 
+const isD8 = typeof Realm !== "undefined";
+if (isD8)
+    globalThis.readFile = read;
+
+const isSpiderMonkey = typeof newGlobal !== "undefined";
+if (isSpiderMonkey)
+    globalThis.readFile = readRelativeToScript;
+
 if (typeof testList === "undefined")
-    testList = undefined;
+    testList = [];
+
+if (typeof arguments != "undefined" && arguments.length > 0) {
+    testList = arguments.slice();
+}
 
 if (typeof testIterationCount === "undefined")
     testIterationCount = undefined;
