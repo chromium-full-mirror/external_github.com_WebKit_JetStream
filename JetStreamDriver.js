@@ -25,6 +25,11 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+
+globalThis.isInBrowser ??= true;
+globalThis.isD8 ??= false;
+
+const preloadResources = !isInBrowser;
 const measureTotalTimeAsSubtest = false; // Once we move to preloading all resources, it would be good to turn this on.
 
 if (typeof RAMification === "undefined")
@@ -51,6 +56,13 @@ if (typeof(URLSearchParams) !== "undefined") {
         customTestList = urlParameters.getAll("test");
 }
 
+function performanceMeasure(name, mark) {
+    // D8 does not implement the official web-api
+    if (globalThis.isD8)
+        performance.measure(name, mark);
+    else
+        performance.measure(name, mark.name);
+}
 // Used for the promise representing the current benchmark run.
 this.currentResolve = null;
 this.currentReject = null;
@@ -545,18 +557,22 @@ class Benchmark {
             let __benchmark = new Benchmark(${this.iterations});
             let results = [];
             let benchmarkName = "${this.name}";
-            let startMark = performance.mark(benchmarkName);
+
             for (let i = 0; i < ${this.iterations}; i++) {
                 if (__benchmark.prepareForNextIteration)
                     __benchmark.prepareForNextIteration();
+
+                const iterationMarkLabel = benchmarkName + "-iteration-" + i;
+                const iterationStartMark = performance.mark(iterationMarkLabel);
 
                 let start = performance.now();
                 __benchmark.runIteration();
                 let end = performance.now();
 
+                performanceMeasure(iterationMarkLabel, iterationStartMark);
+
                 results.push(Math.max(1, end - start));
             }
-            performanceMeasure(benchmarkName, startMark);
             if (__benchmark.validate)
                 __benchmark.validate();
             top.currentResolve(results);`;
@@ -673,6 +689,7 @@ class Benchmark {
         }
         addScript(this.runnerCode);
 
+        let startMark = performance.mark(this.name);
         this.startTime = new Date();
 
         if (RAMification)
@@ -688,6 +705,7 @@ class Benchmark {
         let results = await promise;
 
         this.endTime = new Date();
+        performanceMeasure(this.name, startMark);
 
         if (RAMification) {
             let memoryFootprint = MemoryFootprint();
@@ -980,10 +998,17 @@ class AsyncBenchmark extends DefaultBenchmark {
         async function doRun() {
             let __benchmark = new Benchmark();
             let results = [];
+            let benchmarkName = "${this.name}";
             for (let i = 0; i < ${this.iterations}; i++) {
-                let start = Date.now();
+                const iterationMarkLabel = benchmarkName + "-iteration-" + i;
+                const iterationStartMark = performance.mark(iterationMarkLabel);
+
+                let start = performance.now();
                 await __benchmark.runIteration();
-                let end = Date.now();
+                let end = performance.now();
+
+                performanceMeasure(iterationMarkLabel, iterationStartMark);
+
                 results.push(Math.max(1, end - start));
             }
             if (__benchmark.validate)

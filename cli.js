@@ -23,7 +23,7 @@
  * THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-const isInBrowser = false;
+globalThis.isInBrowser = false;
 if (typeof console === 'undefined')
     var console = {}
 if (typeof console.log === 'undefined')
@@ -44,8 +44,8 @@ if (typeof performance.measure === 'undefined') {
     performance.measure = function (){};
 }
 
-const isD8 = typeof Realm !== "undefined";
-if (isD8)
+globalThis.isD8 = typeof Realm !== "undefined";
+if (globalThis.isD8)
     globalThis.readFile = read;
 
 const isSpiderMonkey = typeof newGlobal !== "undefined";
