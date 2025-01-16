@@ -1,4 +1,5 @@
 function doRun() {
+let __startupMark = performance.mark("HashSet-wasm-startup");
 let __startupStartTime = benchmarkTime();
 var moduleOverrides = {};
 var key;
@@ -586,6 +587,7 @@ function integrateWasmJS() {
    }))
    .then((...args) => {
        reportCompileTime(benchmarkTime() - __startupStartTime);
+       performanceMeasure("richards-wasm-startup", __startupMark);
        return Promise.resolve(...args);
    })
    .then(receiver).catch((function(reason) {
@@ -1005,9 +1007,11 @@ var ___errno_location = Module["___errno_location"] = (function() {
  return Module["asm"]["___errno_location"].apply(null, arguments);
 });
 var _main = Module["_main"] = (function() {
+ let performanceMark = performance.mark("HashSet-wasm-runtime");
  let start = benchmarkTime();
  let ret = Module["asm"]["_main"].apply(null, arguments);
  reportRunTime(benchmarkTime() - start);
+ performanceMeasure("HashSet-wasm-runtime", performanceMark);
  return ret;
 });
 var stackAlloc = Module["stackAlloc"] = (function() {
