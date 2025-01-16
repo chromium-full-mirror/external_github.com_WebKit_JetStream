@@ -1,5 +1,6 @@
 function doRun() {
-    let __startupStartTime = benchmarkTime();
+let __startupMark = performance.mark("quicksort-wasm-startup");
+let __startupStartTime = benchmarkTime();
 var moduleOverrides = {};
 var key;
 for (key in Module) {
@@ -775,6 +776,7 @@ function integrateWasmJS() {
     return WebAssembly.instantiate(binary, info);
    })).then((...args) => {
        reportCompileTime(benchmarkTime() - __startupStartTime);
+       performanceMeasure("quicksort-wasm-startup", __startupMark);
        return Promise.resolve(...args);
    })
    .then(receiver).catch((function(reason) {
@@ -1027,9 +1029,11 @@ var _free = Module["_free"] = (function() {
  return Module["asm"]["_free"].apply(null, arguments);
 });
 var _main = Module["_main"] = (function() {
+ let performanceMark = performance.mark("quicksort-wasm-runtime");
  let start = benchmarkTime();
  let result = Module["asm"]["_main"].apply(null, arguments);
  reportRunTime(benchmarkTime() - start);
+ performanceMeasure("quicksort-wasm-runtime", performanceMark);
  return result;
 });
 var _malloc = Module["_malloc"] = (function() {

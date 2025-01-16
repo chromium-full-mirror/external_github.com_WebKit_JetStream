@@ -1,4 +1,5 @@
 function doRun() {
+let __startupMark = performance.mark("richards-wasm-startup");
 let __startupStartTime = benchmarkTime();
 var moduleOverrides = {};
 var key;
@@ -771,6 +772,7 @@ function integrateWasmJS() {
    }))
    .then((...args) => {
        reportCompileTime(benchmarkTime() - __startupStartTime);
+       performanceMeasure("richards-wasm-startup", __startupMark);
        return Promise.resolve(...args);
    })
    .then(receiver).catch((function(reason) {
@@ -929,9 +931,11 @@ var _getQpktcount = Module["_getQpktcount"] = (function() {
  return Module["asm"]["_getQpktcount"].apply(null, arguments);
 });
 var _main = Module["_main"] = (function() {
+ let performanceMark = performance.mark("richards-wasm-runtime");
  let start = benchmarkTime();
  let ret = Module["asm"]["_main"].apply(null, arguments);
  reportRunTime(benchmarkTime() - start);
+ performanceMeasure("richards-wasm-runtime", performanceMark);
  return ret;
 });
 var _malloc = Module["_malloc"] = (function() {

@@ -52,11 +52,12 @@ const isSpiderMonkey = typeof newGlobal !== "undefined";
 if (isSpiderMonkey)
     globalThis.readFile = readRelativeToScript;
 
-if (typeof testList === "undefined")
-    testList = [];
-
-if (typeof arguments != "undefined" && arguments.length > 0) {
-    testList = arguments.slice();
+if (typeof testList === "undefined") {
+    if (typeof arguments != "undefined" && arguments.length > 0) {
+        testList = arguments.slice();
+    } else {
+        testList = undefined;
+    }
 }
 
 if (typeof testIterationCount === "undefined")
