@@ -1,4 +1,5 @@
 function doRun() {
+let __startupMark = performance.mark("gcc-loops-wasm-startup");
 let __startupStartTime = benchmarkTime();
 var moduleOverrides = {};
 var key;
@@ -790,6 +791,7 @@ function integrateWasmJS() {
    }))
    .then((...args) => {
        reportCompileTime(benchmarkTime() - __startupStartTime);
+       performanceMeasure("gcc-loops-wasm-startup", __startupMark);
        return Promise.resolve(...args);
    })
    .then(receiver).catch((function(reason) {
@@ -5203,9 +5205,11 @@ var _llvm_bswap_i32 = Module["_llvm_bswap_i32"] = (function() {
  return Module["asm"]["_llvm_bswap_i32"].apply(null, arguments);
 });
 var _main = Module["_main"] = (function() {
+ let performanceMark = performance.mark("gcc-loops-wasm-runtime");
  let start = benchmarkTime();
  let ret = Module["asm"]["_main"].apply(null, arguments);
  reportRunTime(benchmarkTime() - start);
+ performanceMeasure("gcc-loops-wasm-runtime", performanceMark);
  return ret;
 });
 var _malloc = Module["_malloc"] = (function() {
