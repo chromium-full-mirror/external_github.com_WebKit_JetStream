@@ -35,7 +35,7 @@ class RegexDNABenchmark extends Benchmark {
         runOnce();
     }
 
-    validate()
+    validate(iterations)
     {
         checkResult();
     }

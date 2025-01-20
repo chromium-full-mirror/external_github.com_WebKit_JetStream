@@ -24,16 +24,24 @@
  */
 "use strict";
 
+const defaultIterationCount = 120;
+
 class PlayerExpectation
 {
-    constructor(wins, handTypeCounts)
+    constructor(iterations, wins, handTypeCounts)
     {
+        this._validate  = iterations === defaultIterationCount
+        // TODO: add more precise counts to validate with custom iterations.
         this._wins = wins;
-        this._handTypeCounts = handTypeCounts;
+        this._handTypeCounts = handTypeCounts
     }
+
 
     validate(player)
     {
+        if (!this._validate)
+            return
+
         if (player.wins != this._wins)
             throw "Expected " + player.name + " to have " + this._wins + ", but they have " + player.wins;
 
@@ -63,9 +71,13 @@ PlayerExpectation._handTypes = [
     "Royal Flushes"
 ];
     
-var playerExpectations = [];
+function getPlayerExpectations(iterations) {
+    var playerExpectations = [];
 
-playerExpectations.push(new PlayerExpectation(59864, [ 120476, 101226, 11359, 5083, 982, 456, 370, 45, 3, 0]));
-playerExpectations.push(new PlayerExpectation(60020, [ 120166, 101440, 11452, 5096, 942, 496, 333, 67, 8, 0]));
-playerExpectations.push(new PlayerExpectation(60065, [ 120262, 101345, 11473, 5093, 941, 472, 335, 76, 3, 0]));
-playerExpectations.push(new PlayerExpectation(60064, [ 120463, 101218, 11445, 5065, 938, 446, 364, 58, 3, 0]));
+    playerExpectations.push(new PlayerExpectation(iterations, 59864, [ 120476, 101226, 11359, 5083, 982, 456, 370, 45, 3, 0]));
+    playerExpectations.push(new PlayerExpectation(iterations, 60020, [ 120166, 101440, 11452, 5096, 942, 496, 333, 67, 8, 0]));
+    playerExpectations.push(new PlayerExpectation(iterations, 60065, [ 120262, 101345, 11473, 5093, 941, 472, 335, 76, 3, 0]));
+    playerExpectations.push(new PlayerExpectation(iterations, 60064, [ 120463, 101218, 11445, 5065, 938, 446, 364, 58, 3, 0]));
+
+    return playerExpectations;
+}
