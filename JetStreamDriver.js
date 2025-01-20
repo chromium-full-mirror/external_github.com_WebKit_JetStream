@@ -38,6 +38,9 @@ if (typeof RAMification === "undefined")
 if (typeof testIterationCount === "undefined")
     var testIterationCount = undefined;
 
+if (typeof testWorstCaseCount === "undefined")
+    var testWorstCaseCount = undefined;
+
 if (typeof testIterationCountMap === "undefined")
     var testIterationCountMap = new Map;
 
@@ -54,6 +57,10 @@ if (typeof(URLSearchParams) !== "undefined") {
     shouldReport = urlParameters.has('report') && urlParameters.get('report').toLowerCase() == 'true';
     if (urlParameters.has('test'))
         customTestList = urlParameters.getAll("test");
+    if (urlParameters.has("worstCaseCount"))
+        testWorstCaseCount = parseInt(urlParameters.get("worstCaseCount"));
+    if (urlParameters.has("iterationCount"))
+        testIterationCount = parseInt(urlParameters.get("iterationCount"));
 }
 
 function performanceMeasure(name, mark) {
@@ -97,6 +104,8 @@ function getIterationCount(plan) {
 function getWorstCaseCount(plan) {
     if (testWorstCaseCountMap.has(plan.name))
         return testWorstCaseCountMap.get(plan.name);
+    if (testWorstCaseCount)
+        return testWorstCaseCount;
     if (plan.worstCaseCount)
         return plan.worstCaseCount;
     return defaultWorstCaseCount;
@@ -574,7 +583,7 @@ class Benchmark {
                 results.push(Math.max(1, end - start));
             }
             if (__benchmark.validate)
-                __benchmark.validate();
+                __benchmark.validate(${this.iterations});
             top.currentResolve(results);`;
     }
 
@@ -924,6 +933,11 @@ class DefaultBenchmark extends Benchmark {
         this.firstIteration = null;
         this.worst4 = null;
         this.average = null;
+
+        assert(this.iterations > this.worstCaseCount,
+            `iteration=${this.iterations} should be greater than worstCaseCount=${this.worstCaseCount}`);
+        assert(this.worstCaseCount > 0,
+            `worstCaseCount=${this.worstCaseCount} should be greater than 0`);
     }
 
     processResults(results) {
@@ -1012,7 +1026,7 @@ class AsyncBenchmark extends DefaultBenchmark {
                 results.push(Math.max(1, end - start));
             }
             if (__benchmark.validate)
-                __benchmark.validate();
+                __benchmark.validate(${this.iterations});
             top.currentResolve(results);
         }
         doRun();`
