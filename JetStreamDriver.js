@@ -38,6 +38,28 @@ if (typeof RAMification === "undefined")
 if (typeof testIterationCount === "undefined")
     var testIterationCount = undefined;
 
+if (typeof testWorstCaseCount === "undefined")
+    var testWorstCaseCount = undefined;
+
+if (typeof isD8 === "undefined")
+    var isD8 = false;
+
+// Used for the promise representing the current benchmark run.
+this.currentResolve = null;
+this.currentReject = null;
+
+const defaultIterationCount = 120;
+const defaultWorstCaseCount = 4;
+
+
+if (typeof(URLSearchParams) !== "undefined") {
+    const urlParameters = new URLSearchParams(window.location.search);
+    if (urlParameters.has("worstCaseCount"))
+        testWorstCaseCount = parseInt(urlParameters.get("worstCaseCount"));
+    if (urlParameters.has("iterationCount"))
+        testIterationCount = parseInt(urlParameters.get("iterationCount"));
+}
+
 function performanceMeasure(name, mark) {
     // D8 does not implement the official web-api
     if (globalThis.isD8)
@@ -45,12 +67,6 @@ function performanceMeasure(name, mark) {
     else
         performance.measure(name, mark.name);
 }
-// Used for the promise representing the current benchmark run.
-this.currentResolve = null;
-this.currentReject = null;
-
-const defaultIterationCount = 120;
-const defaultWorstCaseCount = 4;
 
 function assert(b, m = "") {
     if (!b)
@@ -408,7 +424,7 @@ class Benchmark {
                 results.push(Math.max(1, end - start));
             }
             if (__benchmark.validate)
-                __benchmark.validate();
+                __benchmark.validate(${this.iterations});
             top.currentResolve(results);`;
     }
 
@@ -633,10 +649,15 @@ class DefaultBenchmark extends Benchmark {
     constructor(...args) {
         super(...args);
 
-        this.worstCaseCount = this.plan.worstCaseCount || defaultWorstCaseCount;
+        this.worstCaseCount = testWorstCaseCount || this.plan.worstCaseCount || defaultWorstCaseCount;
         this.firstIteration = null;
         this.worst4 = null;
         this.average = null;
+
+        assert(this.iterations > this.worstCaseCount,
+            `iteration=${this.iterations} should be greater than worstCaseCount=${this.worstCaseCount}`);
+        assert(this.worstCaseCount > 0,
+            `worstCaseCount=${this.worstCaseCount} should be greater than 0`);
     }
 
     processResults(results) {
@@ -725,7 +746,7 @@ class AsyncBenchmark extends DefaultBenchmark {
                 results.push(Math.max(1, end - start));
             }
             if (__benchmark.validate)
-                __benchmark.validate();
+                __benchmark.validate(${this.iterations});
             top.currentResolve(results);
         }
         doRun();`
