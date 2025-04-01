@@ -1055,15 +1055,25 @@ class WSLBenchmark extends Benchmark {
             let benchmark = new Benchmark();
             let results = [];
             {
+                const markLabel = "${this.name}-stdlib";
+                const startMark = performance.mark(markLabel);
+
                 let start = Date.now();
                 benchmark.buildStdlib();
                 results.push(Date.now() - start);
+
+                performanceMeasure(markLabel, startMark);
             }
 
             {
+                const markLabel = "${this.name}-mainRun";
+                const startMark = performance.mark(markLabel);
+
                 let start = Date.now();
                 benchmark.run();
                 results.push(Date.now() - start);
+
+                performanceMeasure(markLabel, startMark);
             }
 
             top.currentResolve(results);
