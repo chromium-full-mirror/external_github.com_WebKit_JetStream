@@ -24,6 +24,8 @@
 */
 
 globalThis.isInBrowser = false;
+globalThis.prefetchResources = true;
+
 if (typeof console === 'undefined')
     var console = {}
 if (typeof console.log === 'undefined')
@@ -52,13 +54,32 @@ const isSpiderMonkey = typeof newGlobal !== "undefined";
 if (isSpiderMonkey)
     globalThis.readFile = readRelativeToScript;
 
+
+let cliFlags = {};
+let cliArgs = [];
+
+if (typeof arguments != "undefined" && arguments.length > 0) {
+    for (const arg of arguments) {
+        if (arg.startsWith("--")) {
+            const parts = arg.split("=");
+            cliFlags[parts[0]] = parts.slice(1).join("=");
+        } else {
+            cliArgs.push(arg);
+        }
+    }
+}
+
 if (typeof testList === "undefined") {
-    if (typeof arguments != "undefined" && arguments.length > 0) {
-        testList = arguments.slice();
+    if (cliArgs.length > 0) {
+        testList = cliArgs;
     } else {
         testList = undefined;
     }
 }
+
+if ("--no-prefetch" in cliFlags || "--noprefetch" in cliFlags)
+   globalThis.prefetchResources = false
+
 
 if (typeof testIterationCount === "undefined")
     testIterationCount = undefined;
@@ -70,6 +91,20 @@ else
 
 load("./JetStreamDriver.js");
 
+if ("--help" in cliFlags) {
+    print("JetStream Driver Help")
+    print("")
+    print("Options:")
+    print("   --no-prefetch: directly use load('...') for benchmark resources.")
+    print("")
+    print("Available tests:")
+    for (const test of testPlans)
+        print("  ", test.name)
+} else {
+    print("Running tests: " + testList)
+    runJetStream();
+}
+
 async function runJetStream() {
     try {
         await JetStream.initialize();
@@ -78,4 +113,3 @@ async function runJetStream() {
         console.log("JetStream2 failed: " + e);
     }
 }
-runJetStream();

@@ -35,6 +35,8 @@
     <script>
     const isInBrowser = true;
     const isD8 = false;
+    let prefetchResources = true;
+
     var allIsGood = true;
     window.onerror = function(e) {
         if (e == "Script error.") {

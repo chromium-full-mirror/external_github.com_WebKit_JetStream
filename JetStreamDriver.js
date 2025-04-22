@@ -202,8 +202,11 @@ const fileLoader = (function() {
         }
 
         async _loadInternal(url) {
-            if (!isInBrowser)
+            if (!isInBrowser) {
+                if (!globalThis.prefetchResources)
+                    return Promise.resolve(`load("${url}");`);
                 return Promise.resolve(readFile(url));
+            }
 
             let response;
             let tries = 3;
