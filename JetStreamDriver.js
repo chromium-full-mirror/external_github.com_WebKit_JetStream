@@ -239,6 +239,8 @@ const fileLoader = (function() {
 class Driver {
     constructor() {
         this.isReady = false;
+        this.isDone = false;
+        this.errors = [];
         this.benchmarks = [];
         this.blobDataCache = { };
         this.loadCache = { };
@@ -274,11 +276,12 @@ class Driver {
             try {
                 await benchmark.run();
             } catch(e) {
-                JetStream.reportError(benchmark);
+                this.reportError(benchmark, e);
                 throw e;
             }
 
             benchmark.updateUIAfterRun();
+            console.log(benchmark.name)
 
             if (isInBrowser) {
                 const cache = JetStream.blobDataCache;
@@ -334,6 +337,8 @@ class Driver {
 
         this.reportScoreToRunBenchmarkRunner();
         this.dumpJSONResultsIfNeeded();
+        this.isDone = true;
+
         if (isInBrowser) {
             globalThis.dispatchEvent(new CustomEvent("JetStreamDone", {
                 detail: this.resultsObject()
@@ -438,23 +443,39 @@ class Driver {
         });
     }
 
-    reportError(benchmark)
+    reportError(benchmark, error)
     {
+        this.pushError(benchmark.name, error);
+
         if (!isInBrowser)
             return;
 
-        for (const id of benchmark.scoreIdentifiers())
+        for (const id of benchmark.scoreIdentifiers()) {
             document.getElementById(id).innerHTML = "error";
+            const benchmarkResultsUI = document.getElementById(`benchmark-${benchmark.name}`);
+            benchmarkResultsUI.classList.remove("benchmark-running");
+            benchmarkResultsUI.classList.add("benchmark-error");
+        }
+    }
+
+    pushError(name, error) {
+        this.errors.push({
+            benchmark: name,
+            error: error.toString(),
+            stack: error.stack
+        });
     }
 
     async initialize() {
+        if (isInBrowser)
+            window.addEventListener("error", (e) => this.pushError("driver startup", e.error));
         await this.prefetchResourcesForBrowser();
         await this.fetchResources();
         this.prepareToRun();
         this.isReady = true;
         if (isInBrowser) {
             globalThis.dispatchEvent(new Event("JetStreamReady"));
-            if (shouldReport) {
+            if (typeof(globalThis.startDelay) !== "undefined") {
                 setTimeout(() => this.start(), globalThis.startDelay);
             }
         }
@@ -508,7 +529,18 @@ class Driver {
         }
     }
 
-    resultsObject()
+    resultsObject(format = "run-benchmark") {
+        switch(format) {
+            case "run-benchmark":
+                return this.runBenchmarkResultsObject();
+            case "simple":
+                return this.simpleResultsObject();
+            default:
+                throw Error(`Unknown result format '${format}'`);
+        }
+    }
+
+    runBenchmarkResultsObject()
     {
         let results = {};
         for (const benchmark of this.benchmarks) {
@@ -528,12 +560,29 @@ class Driver {
 
         results = {"JetStream3.0": {"metrics" : {"Score" : ["Geometric"]}, "tests" : results}};
         return results;
-
     }
 
-    resultsJSON()
+    simpleResultsObject() {
+        const results = {__proto__: null};
+        for (const benchmark of this.benchmarks) {
+            if (!benchmark.isDone)
+                continue;
+            if (!benchmark.isSuccess) {
+                results[benchmark.name] = "FAILED";
+            } else {
+                results[benchmark.name] = {
+                    Score: benchmark.score,
+                    ...benchmark.subScores(),
+
+                };
+            }
+        }
+        return results;
+    }
+
+    resultsJSON(format = "run-benchmark")
     {
-        return JSON.stringify(this.resultsObject());
+        return JSON.stringify(this.resultsObject(format));
     }
 
     dumpJSONResultsIfNeeded()
@@ -566,21 +615,34 @@ class Driver {
     }
 };
 
+const BenchmarkState = Object.freeze({
+    READY: "READY",
+    SETUP: "SETUP",
+    RUNNING: "RUNNING",
+    FINALIZE: "FINALIZE",
+    ERROR: "ERROR",
+    DONE: "DONE"
+})
+
 class Benchmark {
     constructor(plan)
     {
         this.plan = plan;
-        this.testGroup = plan.testGroup;
-
+        this.tags = new Set(plan.tags);
         this.iterations = getIterationCount(plan);
         this.isAsync = !!plan.isAsync;
-
+        this.disabledByDefault = !!plan.disabledByDefault;
         this.scripts = null;
-
         this._resourcesPromise = null;
+        this._state = BenchmarkState.READY;
     }
 
     get name() { return this.plan.name; }
+
+    get isDone() {
+        return this._state == BenchmarkState.DONE || this._state == BenchmarkState.ERROR;
+    }
+    get isSuccess() { return this._state = BenchmarkState.DONE; }
 
     get runnerCode() {
         return `
@@ -643,6 +705,9 @@ class Benchmark {
     }
 
     async run() {
+        if (this.isDone)
+            throw new Error(`Cannot run Benchmark ${this.name} twice`);
+        this._state = BenchmarkState.PREPARE;
         let code;
         if (isInBrowser)
             code = "";
@@ -751,11 +816,15 @@ class Benchmark {
 
         let magicFrame;
         try {
+            this._state = BenchmarkState.RUNNING;
             magicFrame = JetStream.runCode(code);
         } catch(e) {
+            this._state = BenchmarkState.ERROR;
             console.log("Error in runCode: ", e);
             console.log(e.stack)
             throw e;
+        } finally {
+            this._state = BenchmarkState.FINALIZE;
         }
         const results = await promise;
 
@@ -768,6 +837,8 @@ class Benchmark {
         }
 
         this.processResults(results);
+        this._state = BenchmarkState.DONE;
+
         if (isInBrowser)
             magicFrame.contentDocument.close();
         else if (isD8)
@@ -1063,6 +1134,8 @@ class AsyncBenchmark extends DefaultBenchmark {
         return `
         async function doRun() {
             let __benchmark = new Benchmark();
+            if (__benchmark.init)
+                await __benchmark.init();
             let results = [];
             let benchmarkName = "${this.name}";
 
@@ -1129,6 +1202,7 @@ class WasmEMCCBenchmark extends AsyncBenchmark {
         return str;
     }
 
+    // FIXME: Why is this part of the runnerCode and not prerunCode?
     get runnerCode() {
         let str = `function loadBlob(key, path, andThen) {`;
 
@@ -1203,17 +1277,29 @@ class WSLBenchmark extends Benchmark {
     get runnerCode() {
         return `
             let benchmark = new Benchmark();
+            const benchmarkName = "${this.name}";
+
             let results = [];
             {
+                const markLabel = benchmarkName + "-stdlib";
+                const startMark = performance.mark(markLabel);
+
                 let start = performance.now();
                 benchmark.buildStdlib();
                 results.push(performance.now() - start);
+
+                performanceMeasure(markLabel, startMark);
             }
 
             {
+                const markLabel = benchmarkName + "-mainRun";
+                const startMark = performance.mark(markLabel);
+
                 let start = performance.now();
                 benchmark.run();
                 results.push(performance.now() - start);
+
+                performanceMeasure(markLabel, startMark);
             }
 
             top.currentResolve(results);
@@ -1445,26 +1531,7 @@ class WasmLegacyBenchmark extends Benchmark {
     }
 };
 
-const ARESGroup = Symbol.for("ARES");
-const CDJSGroup = Symbol.for("CDJS");
-const CodeLoadGroup = Symbol.for("CodeLoad");
-const LuaJSFightGroup = Symbol.for("LuaJSFight");
-const OctaneGroup = Symbol.for("Octane");
-const RexBenchGroup = Symbol.for("RexBench");
-const SeaMonsterGroup = Symbol.for("SeaMonster");
-const SimpleGroup = Symbol.for("Simple");
-const SunSpiderGroup = Symbol.for("SunSpider");
-const BigIntNobleGroup = Symbol.for("BigIntNoble");
-const BigIntMiscGroup = Symbol.for("BigIntMisc");
-const ProxyGroup = Symbol.for("ProxyGroup");
-const ClassFieldsGroup = Symbol.for("ClassFieldsGroup");
-const GeneratorsGroup = Symbol.for("GeneratorsGroup");
-const WasmGroup = Symbol.for("Wasm");
-const WorkerTestsGroup = Symbol.for("WorkerTests");
-const WSLGroup = Symbol.for("WSL");
-const WTBGroup = Symbol.for("WTB");
-
-const BENCHMARKS = [
+let BENCHMARKS = [
     // ARES
     new DefaultBenchmark({
         name: "Air",
@@ -1491,7 +1558,7 @@ const BENCHMARKS = [
             , "./ARES-6/Air/payload-typescript-scanIdentifier.js"
             , "./ARES-6/Air/benchmark.js"
         ],
-        testGroup: ARESGroup
+        tags: ["ARES"],
     }),
     new DefaultBenchmark({
         name: "Basic",
@@ -1507,7 +1574,7 @@ const BENCHMARKS = [
             , "./ARES-6/Basic/util.js"
             , "./ARES-6/Basic/benchmark.js"
         ],
-        testGroup: ARESGroup
+        tags: ["ARES"],
     }),
     new DefaultBenchmark({
         name: "ML",
@@ -1516,7 +1583,7 @@ const BENCHMARKS = [
             , "./ARES-6/ml/benchmark.js"
         ],
         iterations: 60,
-        testGroup: ARESGroup
+        tags: ["ARES"],
     }),
     new DefaultBenchmark({
         name: "Babylon",
@@ -1530,7 +1597,7 @@ const BENCHMARKS = [
             inspectorBlob: "./ARES-6/Babylon/inspector-blob.js",
             babylonBlob: "./ARES-6/Babylon/babylon-blob.js"
         },
-        testGroup: ARESGroup
+        tags: ["ARES"],
     }),
     // CDJS
     new DefaultBenchmark({
@@ -1551,7 +1618,7 @@ const BENCHMARKS = [
         ],
         iterations: 60,
         worstCaseCount: 3,
-        testGroup: CDJSGroup
+        tags: ["CDJS"],
     }),
     // CodeLoad
     new DefaultBenchmark({
@@ -1562,7 +1629,7 @@ const BENCHMARKS = [
         preload: {
             inspectorPayloadBlob: "./code-load/inspector-payload-minified.js"
         },
-        testGroup: CodeLoadGroup
+        tags: ["CodeLoad"],
     }),
     new DefaultBenchmark({
         name: "multi-inspector-code-load",
@@ -1572,7 +1639,7 @@ const BENCHMARKS = [
         preload: {
             inspectorPayloadBlob: "./code-load/inspector-payload-minified.js"
         },
-        testGroup: CodeLoadGroup
+        tags: ["CodeLoad"],
     }),
     // Octane
     new DefaultBenchmark({
@@ -1581,7 +1648,7 @@ const BENCHMARKS = [
             "./Octane/box2d.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "octane-code-load",
@@ -1589,7 +1656,7 @@ const BENCHMARKS = [
             "./Octane/code-first-load.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "crypto",
@@ -1597,7 +1664,7 @@ const BENCHMARKS = [
             "./Octane/crypto.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "delta-blue",
@@ -1605,7 +1672,7 @@ const BENCHMARKS = [
             "./Octane/deltablue.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "earley-boyer",
@@ -1613,7 +1680,7 @@ const BENCHMARKS = [
             "./Octane/earley-boyer.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "gbemu",
@@ -1622,7 +1689,7 @@ const BENCHMARKS = [
             , "./Octane/gbemu-part2.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "mandreel",
@@ -1631,7 +1698,7 @@ const BENCHMARKS = [
         ],
         iterations: 80,
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "navier-stokes",
@@ -1639,7 +1706,7 @@ const BENCHMARKS = [
             "./Octane/navier-stokes.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "pdfjs",
@@ -1647,14 +1714,14 @@ const BENCHMARKS = [
             "./Octane/pdfjs.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "raytrace",
         files: [
             "./Octane/raytrace.js"
         ],
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "regexp",
@@ -1662,7 +1729,7 @@ const BENCHMARKS = [
             "./Octane/regexp.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "richards",
@@ -1670,7 +1737,7 @@ const BENCHMARKS = [
             "./Octane/richards.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "splay",
@@ -1678,7 +1745,7 @@ const BENCHMARKS = [
             "./Octane/splay.js"
         ],
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     new DefaultBenchmark({
         name: "typescript",
@@ -1690,7 +1757,7 @@ const BENCHMARKS = [
         iterations: 15,
         worstCaseCount: 2,
         deterministicRandom: true,
-        testGroup: OctaneGroup
+        tags: ["Octane"],
     }),
     // RexBench
     new DefaultBenchmark({
@@ -1702,7 +1769,7 @@ const BENCHMARKS = [
             , "./RexBench/FlightPlanner/expectations.js"
             , "./RexBench/FlightPlanner/benchmark.js"
         ],
-        testGroup: RexBenchGroup
+        tags: ["RexBench"],
     }),
     new DefaultBenchmark({
         name: "OfflineAssembler",
@@ -1720,7 +1787,7 @@ const BENCHMARKS = [
             , "./RexBench/OfflineAssembler/benchmark.js"
         ],
         iterations: 80,
-        testGroup: RexBenchGroup
+        tags: ["RexBench"],
     }),
     new DefaultBenchmark({
         name: "UniPoker",
@@ -1730,7 +1797,7 @@ const BENCHMARKS = [
             , "./RexBench/UniPoker/benchmark.js"
         ],
         deterministicRandom: true,
-        testGroup: RexBenchGroup
+        tags: ["RexBench"],
     }),
     // Simple
     new DefaultBenchmark({
@@ -1738,21 +1805,21 @@ const BENCHMARKS = [
         files: [
             "./simple/hash-map.js"
         ],
-        testGroup: SimpleGroup
+        tags: ["Simple"],
     }),
     new AsyncBenchmark({
         name: "doxbee-promise",
         files: [
             "./simple/doxbee-promise.js",
         ],
-        testGroup: SimpleGroup,
+        tags: ["Simple"],
     }),
     new AsyncBenchmark({
         name: "doxbee-async",
         files: [
             "./simple/doxbee-async.js",
         ],
-        testGroup: SimpleGroup,
+        tags: ["Simple"],
     }),
     // SeaMonster
     new DefaultBenchmark({
@@ -1760,14 +1827,14 @@ const BENCHMARKS = [
         files: [
             "./SeaMonster/ai-astar.js"
         ],
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "gaussian-blur",
         files: [
             "./SeaMonster/gaussian-blur.js"
         ],
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "stanford-crypto-aes",
@@ -1775,7 +1842,7 @@ const BENCHMARKS = [
             "./SeaMonster/sjlc.js"
             , "./SeaMonster/stanford-crypto-aes.js"
         ],
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "stanford-crypto-pbkdf2",
@@ -1783,7 +1850,7 @@ const BENCHMARKS = [
             "./SeaMonster/sjlc.js"
             , "./SeaMonster/stanford-crypto-pbkdf2.js"
         ],
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "stanford-crypto-sha256",
@@ -1791,7 +1858,7 @@ const BENCHMARKS = [
             "./SeaMonster/sjlc.js"
             , "./SeaMonster/stanford-crypto-sha256.js"
         ],
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "json-stringify-inspector",
@@ -1801,7 +1868,7 @@ const BENCHMARKS = [
         ],
         iterations: 20,
         worstCaseCount: 2,
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     new DefaultBenchmark({
         name: "json-parse-inspector",
@@ -1811,7 +1878,7 @@ const BENCHMARKS = [
         ],
         iterations: 20,
         worstCaseCount: 2,
-        testGroup: SeaMonsterGroup
+        tags: ["SeaMonster"],
     }),
     // BigInt
     new AsyncBenchmark({
@@ -1824,7 +1891,8 @@ const BENCHMARKS = [
         iterations: 4,
         worstCaseCount: 1,
         deterministicRandom: true,
-        testGroup: BigIntNobleGroup,
+        tags: ["BigIntNoble"],
+        disabledByDefault: true,
     }),
     new AsyncBenchmark({
         name: "bigint-noble-secp256k1",
@@ -1834,7 +1902,8 @@ const BENCHMARKS = [
             "./bigint/noble-benchmark.js",
         ],
         deterministicRandom: true,
-        testGroup: BigIntNobleGroup,
+        tags: ["BigIntNoble"],
+        disabledByDefault: true,
     }),
     new AsyncBenchmark({
         name: "bigint-noble-ed25519",
@@ -1845,7 +1914,7 @@ const BENCHMARKS = [
         ],
         iterations: 30,
         deterministicRandom: true,
-        testGroup: BigIntNobleGroup,
+        tags: ["BigIntNoble"],
     }),
     new DefaultBenchmark({
         name: "bigint-paillier",
@@ -1857,7 +1926,8 @@ const BENCHMARKS = [
         iterations: 10,
         worstCaseCount: 2,
         deterministicRandom: true,
-        testGroup: BigIntMiscGroup,
+        tags: ["BigIntMisc"],
+        disabledByDefault: true,
     }),
     new DefaultBenchmark({
         name: "bigint-bigdenary",
@@ -1867,7 +1937,8 @@ const BENCHMARKS = [
         ],
         iterations: 160,
         worstCaseCount: 16,
-        testGroup: BigIntMiscGroup,
+        tags: ["BigIntMisc"],
+        disabledByDefault: true,
     }),
     // Proxy
     new AsyncBenchmark({
@@ -1879,7 +1950,7 @@ const BENCHMARKS = [
         ],
         iterations: defaultIterationCount * 3,
         worstCaseCount: defaultWorstCaseCount * 3,
-        testGroup: ProxyGroup,
+        tags: ["Proxy"],
     }),
     new AsyncBenchmark({
         name: "proxy-vue",
@@ -1888,7 +1959,7 @@ const BENCHMARKS = [
             "./proxy/vue-bundle.js",
             "./proxy/vue-benchmark.js",
         ],
-        testGroup: ProxyGroup,
+        tags: ["Proxy"]
     }),
     // Class fields
     new DefaultBenchmark({
@@ -1896,14 +1967,14 @@ const BENCHMARKS = [
         files: [
             "./class-fields/raytrace-public-class-fields.js",
         ],
-        testGroup: ClassFieldsGroup,
+        tags: ["ClassFields"]
     }),
     new DefaultBenchmark({
         name: "raytrace-private-class-fields",
         files: [
             "./class-fields/raytrace-private-class-fields.js",
         ],
-        testGroup: ClassFieldsGroup,
+        tags: ["ClassFields"]
     }),
     // Generators
     new AsyncBenchmark({
@@ -1914,7 +1985,7 @@ const BENCHMARKS = [
         iterations: 80,
         worstCaseCount: 6,
         deterministicRandom: true,
-        testGroup: GeneratorsGroup,
+        tags: ["Generators"]
     }),
     new DefaultBenchmark({
         name: "sync-fs",
@@ -1924,21 +1995,21 @@ const BENCHMARKS = [
         iterations: 80,
         worstCaseCount: 6,
         deterministicRandom: true,
-        testGroup: GeneratorsGroup,
+        tags: ["Generators"]
     }),
     new DefaultBenchmark({
         name: "lazy-collections",
         files: [
             "./generators/lazy-collections.js",
         ],
-        testGroup: GeneratorsGroup,
+        tags: ["Generators"]
     }),
     new DefaultBenchmark({
         name: "js-tokens",
         files: [
             "./generators/js-tokens.js",
         ],
-        testGroup: GeneratorsGroup,
+        tags: ["Generators"]
     }),
     // Wasm
     new WasmEMCCBenchmark({
@@ -1950,7 +2021,8 @@ const BENCHMARKS = [
         preload: {
             wasmBinary: "./wasm/HashSet/build/HashSet.wasm"
         },
-        testGroup: WasmGroup
+        iterations: 50,
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "tsf-wasm",
@@ -1961,9 +2033,8 @@ const BENCHMARKS = [
         preload: {
             wasmBinary: "./wasm/TSF/build/tsf.wasm"
         },
-        iterations: 15,
-        worstCaseCount: 2,
-        testGroup: WasmGroup
+        iterations: 50,
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "quicksort-wasm",
@@ -1975,7 +2046,7 @@ const BENCHMARKS = [
             wasmBinary: "./wasm/quicksort/build/quicksort.wasm"
         },
         iterations: 50,
-        testGroup: WasmGroup
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "gcc-loops-wasm",
@@ -1987,7 +2058,7 @@ const BENCHMARKS = [
             wasmBinary: "./wasm/gcc-loops/build/gcc-loops.wasm"
         },
         iterations: 50,
-        testGroup: WasmGroup
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "richards-wasm",
@@ -1998,9 +2069,8 @@ const BENCHMARKS = [
         preload: {
             wasmBinary: "./wasm/richards/build/richards.wasm"
         },
-        iterations: 20,
-        worstCaseCount: 2,
-        testGroup: WasmGroup
+        iterations: 50,
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "sqlite3-wasm",
@@ -2011,9 +2081,21 @@ const BENCHMARKS = [
         preload: {
             wasmBinary: "./sqlite3/build/jswasm/speedtest1.wasm"
         },
+        iterations: 30,
+        worstCaseCount: 2,
+        tags: ["Wasm"],
+    }),
+    new WasmEMCCBenchmark({
+        name: "Dart-flute-wasm",
+        files: [
+            "./Dart/benchmark.js",
+        ],
+        preload: {
+            wasmBinary: "./Dart/build/flute.dart2wasm.wasm"
+        },
         iterations: 15,
         worstCaseCount: 2,
-        testGroup: WasmGroup
+        tags: ["Wasm"],
     }),
     new WasmLegacyBenchmark({
         name: "tfjs-wasm",
@@ -2033,7 +2115,7 @@ const BENCHMARKS = [
         },
         async: true,
         deterministicRandom: true,
-        testGroup: WasmGroup
+        tags: ["Wasm"],
     }),
     new WasmLegacyBenchmark({
         name: "tfjs-wasm-simd",
@@ -2053,31 +2135,21 @@ const BENCHMARKS = [
         },
         async: true,
         deterministicRandom: true,
-        testGroup: WasmGroup
+        tags: ["Wasm"],
     }),
-    new WasmLegacyBenchmark({
+    new WasmEMCCBenchmark({
         name: "argon2-wasm",
         files: [
-            "./wasm/argon2-bundle.js",
-            "./wasm/argon2.js",
-            "./wasm/argon2-benchmark.js"
+            "./wasm/argon2/build/argon2.js",
+            "./wasm/argon2/benchmark.js",
         ],
         preload: {
-            argon2WasmBlob: "./wasm/argon2.wasm",
+            wasmBinary: "./wasm/argon2/build/argon2.wasm"
         },
-        testGroup: WasmGroup
-    }),
-    new WasmLegacyBenchmark({
-        name: "argon2-wasm-simd",
-        files: [
-            "./wasm/argon2-bundle.js",
-            "./wasm/argon2.js",
-            "./wasm/argon2-benchmark.js"
-        ],
-        preload: {
-            argon2WasmSimdBlob: "./wasm/argon2-simd.wasm",
-        },
-        testGroup: WasmGroup
+        iterations: 30,
+        worstCaseCount: 3,
+        deterministicRandom: true,
+        tags: ["Wasm"],
     }),
     // WorkerTests
     new AsyncBenchmark({
@@ -2114,7 +2186,7 @@ const BENCHMARKS = [
             , stringUnpackCode: "./worker/bomb-subtests/string-unpack-code.js"
             , regexpDNA: "./worker/bomb-subtests/regexp-dna.js"
         },
-        testGroup: WorkerTestsGroup
+        tags: ["WorkerTests"],
     }),
     new AsyncBenchmark({
         name: "segmentation",
@@ -2126,29 +2198,43 @@ const BENCHMARKS = [
         },
         iterations: 36,
         worstCaseCount: 3,
-        testGroup: WorkerTestsGroup
+        tags: ["WorkerTests"],
     }),
     // WSL
     new WSLBenchmark({
         name: "WSL",
         files: ["./WSL/Node.js" ,"./WSL/Type.js" ,"./WSL/ReferenceType.js" ,"./WSL/Value.js" ,"./WSL/Expression.js" ,"./WSL/Rewriter.js" ,"./WSL/Visitor.js" ,"./WSL/CreateLiteral.js" ,"./WSL/CreateLiteralType.js" ,"./WSL/PropertyAccessExpression.js" ,"./WSL/AddressSpace.js" ,"./WSL/AnonymousVariable.js" ,"./WSL/ArrayRefType.js" ,"./WSL/ArrayType.js" ,"./WSL/Assignment.js" ,"./WSL/AutoWrapper.js" ,"./WSL/Block.js" ,"./WSL/BoolLiteral.js" ,"./WSL/Break.js" ,"./WSL/CallExpression.js" ,"./WSL/CallFunction.js" ,"./WSL/Check.js" ,"./WSL/CheckLiteralTypes.js" ,"./WSL/CheckLoops.js" ,"./WSL/CheckRecursiveTypes.js" ,"./WSL/CheckRecursion.js" ,"./WSL/CheckReturns.js" ,"./WSL/CheckUnreachableCode.js" ,"./WSL/CheckWrapped.js" ,"./WSL/Checker.js" ,"./WSL/CloneProgram.js" ,"./WSL/CommaExpression.js" ,"./WSL/ConstexprFolder.js" ,"./WSL/ConstexprTypeParameter.js" ,"./WSL/Continue.js" ,"./WSL/ConvertPtrToArrayRefExpression.js" ,"./WSL/DereferenceExpression.js" ,"./WSL/DoWhileLoop.js" ,"./WSL/DotExpression.js" ,"./WSL/DoubleLiteral.js" ,"./WSL/DoubleLiteralType.js" ,"./WSL/EArrayRef.js" ,"./WSL/EBuffer.js" ,"./WSL/EBufferBuilder.js" ,"./WSL/EPtr.js" ,"./WSL/EnumLiteral.js" ,"./WSL/EnumMember.js" ,"./WSL/EnumType.js" ,"./WSL/EvaluationCommon.js" ,"./WSL/Evaluator.js" ,"./WSL/ExpressionFinder.js" ,"./WSL/ExternalOrigin.js" ,"./WSL/Field.js" ,"./WSL/FindHighZombies.js" ,"./WSL/FlattenProtocolExtends.js" ,"./WSL/FlattenedStructOffsetGatherer.js" ,"./WSL/FloatLiteral.js" ,"./WSL/FloatLiteralType.js" ,"./WSL/FoldConstexprs.js" ,"./WSL/ForLoop.js" ,"./WSL/Func.js" ,"./WSL/FuncDef.js" ,"./WSL/FuncInstantiator.js" ,"./WSL/FuncParameter.js" ,"./WSL/FunctionLikeBlock.js" ,"./WSL/HighZombieFinder.js" ,"./WSL/IdentityExpression.js" ,"./WSL/IfStatement.js" ,"./WSL/IndexExpression.js" ,"./WSL/InferTypesForCall.js" ,"./WSL/Inline.js" ,"./WSL/Inliner.js" ,"./WSL/InstantiateImmediates.js" ,"./WSL/IntLiteral.js" ,"./WSL/IntLiteralType.js" ,"./WSL/Intrinsics.js" ,"./WSL/LateChecker.js" ,"./WSL/Lexer.js" ,"./WSL/LexerToken.js" ,"./WSL/LiteralTypeChecker.js" ,"./WSL/LogicalExpression.js" ,"./WSL/LogicalNot.js" ,"./WSL/LoopChecker.js" ,"./WSL/MakeArrayRefExpression.js" ,"./WSL/MakePtrExpression.js" ,"./WSL/NameContext.js" ,"./WSL/NameFinder.js" ,"./WSL/NameResolver.js" ,"./WSL/NativeFunc.js" ,"./WSL/NativeFuncInstance.js" ,"./WSL/NativeType.js" ,"./WSL/NativeTypeInstance.js" ,"./WSL/NormalUsePropertyResolver.js" ,"./WSL/NullLiteral.js" ,"./WSL/NullType.js" ,"./WSL/OriginKind.js" ,"./WSL/OverloadResolutionFailure.js" ,"./WSL/Parse.js" ,"./WSL/Prepare.js" ,"./WSL/Program.js" ,"./WSL/ProgramWithUnnecessaryThingsRemoved.js" ,"./WSL/PropertyResolver.js" ,"./WSL/Protocol.js" ,"./WSL/ProtocolDecl.js" ,"./WSL/ProtocolFuncDecl.js" ,"./WSL/ProtocolRef.js" ,"./WSL/PtrType.js" ,"./WSL/ReadModifyWriteExpression.js" ,"./WSL/RecursionChecker.js" ,"./WSL/RecursiveTypeChecker.js" ,"./WSL/ResolveNames.js" ,"./WSL/ResolveOverloadImpl.js" ,"./WSL/ResolveProperties.js" ,"./WSL/ResolveTypeDefs.js" ,"./WSL/Return.js" ,"./WSL/ReturnChecker.js" ,"./WSL/ReturnException.js" ,"./WSL/StandardLibrary.js" ,"./WSL/StatementCloner.js" ,"./WSL/StructLayoutBuilder.js" ,"./WSL/StructType.js" ,"./WSL/Substitution.js" ,"./WSL/SwitchCase.js" ,"./WSL/SwitchStatement.js" ,"./WSL/SynthesizeEnumFunctions.js" ,"./WSL/SynthesizeStructAccessors.js" ,"./WSL/TrapStatement.js" ,"./WSL/TypeDef.js" ,"./WSL/TypeDefResolver.js" ,"./WSL/TypeOrVariableRef.js" ,"./WSL/TypeParameterRewriter.js" ,"./WSL/TypeRef.js" ,"./WSL/TypeVariable.js" ,"./WSL/TypeVariableTracker.js" ,"./WSL/TypedValue.js" ,"./WSL/UintLiteral.js" ,"./WSL/UintLiteralType.js" ,"./WSL/UnificationContext.js" ,"./WSL/UnreachableCodeChecker.js" ,"./WSL/VariableDecl.js" ,"./WSL/VariableRef.js" ,"./WSL/VisitingSet.js" ,"./WSL/WSyntaxError.js" ,"./WSL/WTrapError.js" ,"./WSL/WTypeError.js" ,"./WSL/WhileLoop.js" ,"./WSL/WrapChecker.js", "./WSL/Test.js"],
-        testGroup: WSLGroup
+        tags: ["WSL"],
     }),
     // 8bitbench
-    new WasmLegacyBenchmark({
+    new WasmEMCCBenchmark({
         name: "8bitbench-wasm",
         files: [
-            "./8bitbench/lib/fast-text-encoding-1.0.3/text.js",
-            "./8bitbench/rust/pkg/emu_bench.js",
-            "./8bitbench/js3harness.js"
+            "./8bitbench/build/lib/fast-text-encoding-1.0.3/text.js",
+            "./8bitbench/build/rust/pkg/emu_bench.js",
+            "./8bitbench/benchmark.js",
         ],
         preload: {
-            wasmBinary: "./8bitbench/rust/pkg/emu_bench_bg.wasm.release",
-            romBinary: "./8bitbench/assets/program.bin"
+            wasmBinary: "./8bitbench/build/rust/pkg/emu_bench_bg.wasm",
+            romBinary: "./8bitbench/build/assets/program.bin"
         },
-        async: true,
-        testGroup: WasmGroup
-    })
+        iterations: 15,
+        worstCaseCount: 2,
+        tags: ["Wasm"],
+    }),
+    // zlib-wasm
+    new WasmEMCCBenchmark({
+        name: "zlib-wasm",
+        files: [
+            "./wasm/zlib/build/zlib.js",
+            "./wasm/zlib/benchmark.js",
+        ],
+        preload: {
+            wasmBinary: "./wasm/zlib/build/zlib.wasm",
+        },
+        iterations: 40,
+        tags: ["Wasm"],
+    }),
 ];
 
 // LuaJSFight tests
@@ -2164,7 +2250,7 @@ for (const test of luaJSFightTests) {
         files: [
             `./LuaJSFight/${test}.js`
         ],
-        testGroup: LuaJSFightGroup
+        tags: ["LuaJSFight"],
     }));
 }
 
@@ -2189,7 +2275,7 @@ for (const test of SUNSPIDER_TESTS) {
         files: [
             `./SunSpider/${test}.js`
         ],
-        testGroup: SunSpiderGroup
+        tags: ["SunSpider"],
     }));
 }
 
@@ -2214,51 +2300,68 @@ for (const name of WTB_TESTS) {
         ],
         iterations: 5,
         worstCaseCount: 1,
-        testGroup: WTBGroup
+        tags: ["WTB"],
     }));
 }
 
 
 const benchmarksByName = new Map();
-const benchmarksByGroup = new Map();
+const benchmarksByTag = new Map();
 
 for (const benchmark of BENCHMARKS) {
-    const testName = benchmark.name;
+    const name = benchmark.name;
 
-    if (benchmarksByName.has(benchmark.name))
-        throw "Duplicate test plan with name \"" + testName + "\"";
+    if (benchmarksByName.has(name))
+        throw new Error(`Duplicate benchmark with name "${name}}"`);
     else
-        benchmarksByName.set(testName, benchmark);
+        benchmarksByName.set(name, benchmark);
 
-    const group = benchmark.testGroup;
-
-    if (benchmarksByGroup.has(group))
-        benchmarksByGroup.get(group).push(testName);
-    else
-        benchmarksByGroup.set(group, [testName]);
+    for (const tag of benchmark.tags) {
+        if (benchmarksByTag.has(tag))
+            benchmarksByTag.get(tag).push(benchmark);
+        else
+            benchmarksByTag.set(tag, [benchmark]);
+    }
 }
 
 this.JetStream = new Driver();
 
-function enableBenchmarksByName(testName)
+function enableBenchmarks(benchmarks, forceEnable = false)
 {
-    const benchmark = benchmarksByName.get(testName);
+    for (let benchmark of benchmarks) {
+        if (!forceEnable && benchmark.disabledByDefault)
+            return;
 
-    if (benchmark)
         JetStream.addBenchmark(benchmark);
-    else
-        throw "Couldn't find test named \"" +  testName + "\"";
+    }
 }
 
-function enableBenchmarksByGroup(groupSymbol)
+function enableBenchmarksByName(name)
 {
-    const benchmarkNames = benchmarksByGroup.get(groupSymbol);
+    const benchmark = benchmarksByName.get(name);
 
-    if (!benchmarkNames)
-        throw "Couldn't find test group named: \"" + Symbol.keyFor(groupSymbol) + "\"";
+    if (!benchmark)
+        throw new Error(`Couldn't find benchmark named "${name}"`);
 
-    for (let name of benchmarkNames)
-        enableBenchmarksByName(name);
+    // We only use this for test lists.
+    JetStream.addBenchmark(benchmark);
+}
+
+function enableBenchmarksByTag(tag, forceEnable = false)
+{
+    const benchmarks = benchmarksByTag.get(tag);
+
+    if (!benchmarks) {
+        const validTags = Array.from(benchmarksByTag.keys()).join(", ");
+        throw new Error(`Couldn't find tag named: ${tag}.\n Choices are ${validTags}`);
+    }
+
+    for (const benchmark of benchmarks) {
+        if (!forceEnable && benchmark.disabledByDefault)
+            continue;
+
+        JetStream.addBenchmark(benchmark);
+    }
 }
 
 function processTestList(testList)
@@ -2270,10 +2373,10 @@ function processTestList(testList)
     else
         benchmarkNames = testList.split(/[\s,]/);
 
+    const forceEnable = true;
     for (const name of benchmarkNames) {
-        const groupSymbol = Symbol.for(name);
-        if (benchmarksByGroup.has(groupSymbol))
-            enableBenchmarksByGroup(groupSymbol)
+        if (benchmarksByTag.has(name))
+            enableBenchmarksByTag(name, forceEnable);
         else
             enableBenchmarksByName(name);
     }
@@ -2325,53 +2428,53 @@ if (typeof testList !== "undefined") {
     processTestList(customTestList);
 } else {
     if (runARES)
-        enableBenchmarksByGroup(ARESGroup);
+        enableBenchmarksByTag("ARES");
 
     if (runCDJS)
-        enableBenchmarksByGroup(CDJSGroup);
+        enableBenchmarksByTag("CDJS");
 
     if (runCodeLoad)
-        enableBenchmarksByGroup(CodeLoadGroup);
+        enableBenchmarksByTag("CodeLoad");
 
     if (runOctane)
-        enableBenchmarksByGroup(OctaneGroup);
+        enableBenchmarksByTag("Octane");
 
     if (runRexBench)
-        enableBenchmarksByGroup(RexBenchGroup);
+        enableBenchmarksByTag("RexBench");
 
     if (runSeaMonster)
-        enableBenchmarksByGroup(SeaMonsterGroup);
+        enableBenchmarksByTag("SeaMonster");
 
     if (runSimple)
-        enableBenchmarksByGroup(SimpleGroup);
+        enableBenchmarksByTag("Simple");
 
     if (runSunSpider)
-        enableBenchmarksByGroup(SunSpiderGroup);
+        enableBenchmarksByTag("SunSpider");
 
     if (runBigIntNoble)
-        enableBenchmarksByGroup(BigIntNobleGroup);
+        enableBenchmarksByTag("BigIntNoble");
 
     if (runBigIntMisc)
-        enableBenchmarksByGroup(BigIntMiscGroup);
+        enableBenchmarksByTag("BigIntMisc");
 
     if (runProxy)
-        enableBenchmarksByGroup(ProxyGroup);
+        enableBenchmarksByTag("Proxy");
 
     if (runClassFields)
-        enableBenchmarksByGroup(ClassFieldsGroup);
+        enableBenchmarksByTag("ClassFields");
 
     if (runGenerators)
-        enableBenchmarksByGroup(GeneratorsGroup);
+        enableBenchmarksByTag("Generators");
 
     if (runWasm)
-        enableBenchmarksByGroup(WasmGroup);
+        enableBenchmarksByTag("Wasm");
 
     if (runWorkerTests)
-        enableBenchmarksByGroup(WorkerTestsGroup);
+        enableBenchmarksByTag("WorkerTests");
 
     if (runWSL)
-        enableBenchmarksByGroup(WSLGroup);
+        enableBenchmarksByTag("WSL");
 
     if (runWTB)
-        enableBenchmarksByGroup(WTBGroup);
+        enableBenchmarksByTag("WTB");
 }

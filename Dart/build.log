@@ -1,0 +1,5 @@
+Built on 2025-03-06 09:52:17+01:00
+Cloning into 'wasm_gc_benchmarks'...
+f80892d Update Dart SDK, switch wasm to -O2, recompile performance benchmarks
+Copying files from wasm_gc_benchmarks/ into build/
+Build success
