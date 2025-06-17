@@ -24,10 +24,10 @@
 */
 
 const isInBrowser = false;
-const isD8 = false;
+const isD8 = typeof Realm !== "undefined";
 const isSpiderMonkey = false;
 console = {
-    log: () => { }
+    log: print
 }
 
 testList = ["HashSet-wasm", "tsf-wasm", "quicksort-wasm", "gcc-loops-wasm", "richards-wasm"];

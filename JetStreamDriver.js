@@ -28,8 +28,7 @@
 
 globalThis.isInBrowser ??= true;
 globalThis.isD8 ??= false;
-
-const preloadResources = !isInBrowser;
+globalThis.prefetchResources ??= !isInBrowser;
 const measureTotalTimeAsSubtest = false; // Once we move to preloading all resources, it would be good to turn this on.
 
 if (typeof RAMification === "undefined")
@@ -182,17 +181,8 @@ function uiFriendlyNumber(num) {
     return num.toFixed(3);
 }
 
-function uiFriendlyDuration(time)
-{
-    let minutes = time.getMinutes();
-    let seconds = time.getSeconds();
-    let milliSeconds = time.getMilliseconds();
-    let result = "" + minutes + ":";
-
-    result = result + (seconds < 10 ? "0" : "") + seconds + ".";
-    result = result + (milliSeconds < 10 ? "00" : (milliSeconds < 100 ? "0" : "")) + milliSeconds;
-
-    return result;
+function uiFriendlyDuration(time) {
+  return time.toFixed(3) + " ms";
 }
 
 const fileLoader = (function() {
@@ -298,7 +288,7 @@ class Driver {
             }
         }
 
-        let totalTime = Date.now() - start;
+        let totalTime = performance.now() - start;
         if (measureTotalTimeAsSubtest) {
             if (isInBrowser)
                 document.getElementById("benchmark-total-time-score").innerHTML = uiFriendlyNumber(totalTime);
@@ -308,18 +298,30 @@ class Driver {
         }
 
         let allScores = [];
-        for (let benchmark of this.benchmarks)
-            allScores.push(benchmark.score);
-
-        categoryScores = new Map;
+        let allTimes = [];
         for (let benchmark of this.benchmarks) {
-            for (let category of Object.keys(benchmark.subTimes()))
+            allScores.push(benchmark.score);
+            allTimes.push(benchmark.mean);
+        }
+
+        let categoryScores = new Map();
+        let categoryTimes = new Map();
+        for (let benchmark of this.benchmarks) {
+            for (let category of Object.keys(benchmark.subScores())) {
                 categoryScores.set(category, []);
+            }
+            for (let category of Object.keys(benchmark.subTimes())) {
+                categoryTimes.set(category, []);
+            }
         }
 
         for (let benchmark of this.benchmarks) {
-            for (let [category, value] of Object.entries(benchmark.subTimes())) {
+            for (let [category, value] of Object.entries(benchmark.subScores())) {
                 let arr = categoryScores.get(category);
+                arr.push(value);
+            }
+            for (let [category, value] of Object.entries(benchmark.subTimes())) {
+                let arr = categoryTimes.get(category);
                 arr.push(value);
             }
         }
@@ -333,10 +335,17 @@ class Driver {
             statusElement.innerHTML = '';
         } else {
             console.log("\n");
-            for (let [category, scores] of categoryScores)
-                console.log(`${category}: ${uiFriendlyNumber(geomean(scores))}`);
-
-            console.log("\nTotal Score: ", uiFriendlyNumber(geomean(allScores)), "\n");
+            console.log("Mean-Times:");
+            for (let [category, times] of categoryTimes) {
+                console.log(`    ${category}-Time: ${uiFriendlyDuration(geomean(times))}`);
+            }
+            console.log("Mean-Scores:");
+            for (let [category, scores] of categoryScores) {
+                console.log(`    ${category}-Score: ${uiFriendlyNumber(geomean(scores))}`);
+            }
+            console.log("\nTotals:");
+            console.log("    Total-Time:", uiFriendlyDuration(geomean(allTimes)));
+            console.log("    Total-Score:", uiFriendlyNumber(geomean(allScores)));
         }
 
         this.reportScoreToRunBenchmarkRunner();
@@ -449,7 +458,7 @@ class Driver {
     }
 
     async prefetchResourcesForBrowser() {
-        if (!isInBrowser)
+        if (!isInBrowser && !isD8)
             return;
 
         var promises = [];
@@ -500,10 +509,14 @@ class Driver {
     {
         let results = {};
         for (let benchmark of this.benchmarks) {
-            const subResults = {}
+            const subResults = {};
+            const subScores = benchmark.subScores();
             const subTimes = benchmark.subTimes();
-            for (const name in subTimes) {
-                subResults[name] = {"metrics": {"Time": {"current": [toTimeValue(subTimes[name])]}}};
+            for (const name in subScores) {
+                subResults[name] = {"metrics": {
+                    "Score": {"current": [toTimeValue(subScores[name])]},
+                    "Time": {"current": [toTimeValue(subTimes[name])]}
+                }};
             }
             results[benchmark.name] = {
                 "metrics" : {
@@ -668,8 +681,13 @@ class Benchmark {
 
         if (this.plan.preload) {
             let str = "";
-            for (let [variableName, blobUrl] of this.preloads)
-                str += `const ${variableName} = "${blobUrl}";\n`;
+            if (isD8) {
+                for (let [variableName, filePath] of Object.entries(this.plan.preload))
+                    str += `const ${variableName} = "${filePath}";\n`;
+            } else {
+                for (let [variableName, blobUrl] of this.preloads)
+                    str += `const ${variableName} = "${blobUrl}";\n`;
+            }
             addScript(str);
         }
 
@@ -789,6 +807,8 @@ class Benchmark {
     }
 
     prefetchResourcesForBrowser() {
+        if (isD8)
+          return this.prefetchResourcesForD8();
         if (!isInBrowser)
             return;
         let promises = this.plan.files.map((file) => this.loadBlob("file", null, file).then((blobData) => {
@@ -849,10 +869,14 @@ class Benchmark {
 
         if (!blobData.blob) {
             window.allIsGood = false;
-            throw new Error("Fetch failed"); 
+            throw new Error("Fetch failed");
         }
 
         return !counter.failedPreloadResources && counter.loadedResources == counter.totalResources;
+    }
+
+    prefetchResourcesForD8() {
+        // For d8 we just keep the file name
     }
 
     async retryPrefetchResourcesForBrowser() {
@@ -904,6 +928,7 @@ class Benchmark {
 
     updateUIBeforeRun() {
         if (!isInBrowser) {
+            console.log("");
             console.log(`Running ${this.name}:`);
             return;
         }
@@ -933,9 +958,12 @@ class DefaultBenchmark extends Benchmark {
         super(...args);
 
         this.worstCaseCount = getWorstCaseCount(this.plan);
-        this.firstIteration = null;
-        this.worst4 = null;
-        this.average = null;
+        this.firstIteration = 0.0;
+        this.firstIterationScore = 0.0;
+        this.worst4 = 0.0;
+        this.worst4Score = 0.0;
+        this.average = 0.0;
+        this.averageScore = 0.0;
 
         assert(this.iterations > this.worstCaseCount,
             `iteration=${this.iterations} should be greater than worstCaseCount=${this.worstCaseCount}`);
@@ -952,7 +980,8 @@ class DefaultBenchmark extends Benchmark {
         }
         results = copyArray(results);
 
-        this.firstIteration = toScore(results[0]);
+        this.firstIteration = results[0];
+        this.firstIterationScore = toScore(this.firstIteration);
 
         results = results.slice(1);
         results.sort((a, b) => a < b ? 1 : -1);
@@ -962,11 +991,17 @@ class DefaultBenchmark extends Benchmark {
         let worstCase = [];
         for (let i = 0; i < this.worstCaseCount; ++i)
             worstCase.push(results[i]);
-        this.worst4 = toScore(mean(worstCase));
-        this.average = toScore(mean(results));
+        this.worst4 = mean(worstCase);
+        this.worst4Score = toScore(this.worst4);
+        this.average = mean(results);
+        this.averageScore = toScore(this.average);
     }
 
     get score() {
+        return geomean([this.firstIterationScore, this.worst4Score, this.averageScore]);
+    }
+
+    get mean() {
         return geomean([this.firstIteration, this.worst4, this.average]);
     }
 
@@ -975,6 +1010,14 @@ class DefaultBenchmark extends Benchmark {
             "First": this.firstIteration,
             "Worst": this.worst4,
             "Average": this.average,
+        };
+    }
+
+    subScores() {
+        return {
+            "First": this.firstIterationScore,
+            "Worst": this.worst4Score,
+            "Average": this.averageScore,
         };
     }
 
@@ -997,15 +1040,21 @@ class DefaultBenchmark extends Benchmark {
             return;
         }
 
-        console.log("    Startup:", uiFriendlyNumber(this.firstIteration));
-        console.log("    Worst Case:", uiFriendlyNumber(this.worst4));
-        console.log("    Average:", uiFriendlyNumber(this.average));
-        console.log("    Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Startup:", uiFriendlyDuration(this.firstIteration));
+        console.log(this.name, "Startup-Score:", uiFriendlyNumber(this.firstIterationScore));
+        console.log(this.name, "Worst-Case:", uiFriendlyDuration(this.worst4));
+        console.log(this.name, "Worst-Case-Score:", uiFriendlyNumber(this.worst4Score));
+        console.log(this.name, "Average:", uiFriendlyDuration(this.average));
+        console.log(this.name, "Average-Score:", uiFriendlyNumber(this.averageScore));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
+
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current-Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak-Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Wall time:", uiFriendlyDuration(new Date(this.endTime - this.startTime)));
+        let duration = (this.endTime - this.startTime)
+        console.log(this.name, "Wall-Time:", uiFriendlyDuration(duration));
     }
 }
 
@@ -1041,17 +1090,26 @@ class WSLBenchmark extends Benchmark {
         super(...args);
 
         this.stdlib = null;
+        this.stdlibScore = null;
         this.mainRun = null;
+        this.mainRunScore = null;
     }
 
     processResults(results) {
-        this.stdlib = toScore(results[0]);
-        this.mainRun = toScore(results[1]);
+        this.stdlib = results[0];
+        this.stdlibScore = toScore(this.stdlib);
+        this.mainRun = results[1];
+        this.mainRunScore = toScore(this.mainRun);
+    }
+
+    get mean() {
+        return geomean([this.stdlib, this.mainRun]);
     }
 
     get score() {
-        return geomean([this.stdlib, this.mainRun]);
+        return geomean([this.stdlibScore, this.mainRunScore]);
     }
+
 
     get runnerCode() {
         return `
@@ -1083,6 +1141,13 @@ class WSLBenchmark extends Benchmark {
             `;
     }
 
+    subScores() {
+        return {
+            "Stdlib": this.stdlibScore,
+            "MainRun": this.mainRunScore,
+        };
+    }
+
     subTimes() {
         return {
             "Stdlib": this.stdlib,
@@ -1108,14 +1173,17 @@ class WSLBenchmark extends Benchmark {
             return;
         }
 
-        console.log("    Stdlib:", uiFriendlyNumber(this.stdlib));
-        console.log("    Tests:", uiFriendlyNumber(this.mainRun));
-        console.log("    Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Stdlib:", uiFriendlyDuration(this.stdlib));
+        console.log(this.name, "Stdlib-Score:", uiFriendlyNumber(this.stdlibScore));
+        console.log(this.name, "Tests:", uiFriendlyDuration(this.mainRun));
+        console.log(this.name, "Tests-Score:", uiFriendlyNumber(this.mainRunScore));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current-Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak-Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Wall time:", uiFriendlyDuration(new Date(this.endTime - this.startTime)));
+        console.log(this.name, "Wall-Time:", uiFriendlyDuration(this.endTime - this.startTime));
     }
 };
 
@@ -1123,17 +1191,25 @@ class WasmBenchmark extends Benchmark {
     constructor(...args) {
         super(...args);
 
-        this.startupTime = null;
-        this.runTime = null;
+        this.startupTime = 0.0;
+        this.startupScore = 0.0;
+        this.runTime = 0.0;
+        this.runScore = 0.0;
     }
 
     processResults(results) {
-        this.startupTime = toScore(results[0]);
-        this.runTime = toScore(results[1]);
+        this.startupTime = results[0];
+        this.startupScore = toScore(this.startupTime);
+        this.runTime = results[1];
+        this.runScore = toScore(this.runTime);
+    }
+
+    get mean() {
+        return geomean([this.startupTime, this.runTime]);
     }
 
     get score() {
-        return geomean([this.startupTime, this.runTime]);
+        return geomean([this.startupScore, this.runScore]);
     }
 
     get wasmPath() {
@@ -1230,6 +1306,13 @@ class WasmBenchmark extends Benchmark {
         return str;
     }
 
+    subScores() {
+        return {
+            "Startup": this.startupScore,
+            "Runtime": this.runScore,
+        };
+    }
+
     subTimes() {
         return {
             "Startup": this.startupTime,
@@ -1264,13 +1347,16 @@ class WasmBenchmark extends Benchmark {
             document.getElementById(this.scoreID).innerHTML = uiFriendlyNumber(this.score);
             return;
         }
-        console.log("    Startup:", uiFriendlyNumber(this.startupTime));
-        console.log("    Run time:", uiFriendlyNumber(this.runTime));
+        console.log(this.name, "Startup:", uiFriendlyDuration(this.startupTime));
+        console.log(this.name, "Startup-Score:", uiFriendlyNumber(this.startupScore));
+        console.log(this.name, "Run-Time:", uiFriendlyDuration(this.runTime));
+        console.log(this.name, "Run-Time-Score:", uiFriendlyNumber(this.runScore));
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current-Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak-Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
     }
 };
 

@@ -101,7 +101,11 @@ if ("--help" in cliFlags) {
     for (const test of testPlans)
         print("  ", test.name)
 } else {
-    print("Running tests: " + testList)
+    if (testList) {
+        print("Running tests: " + testList)
+    } else {
+        print("Running all tests")
+    }
     runJetStream();
 }
 

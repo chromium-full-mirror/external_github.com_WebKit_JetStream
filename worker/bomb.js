@@ -28,6 +28,7 @@ let cycleCount = 20;
 let resolve = null;
 
 let numWorkers = 0;
+
 function startWorker(file) {
     numWorkers++;
     let worker = new Worker(file);
@@ -41,7 +42,7 @@ function startWorker(file) {
 }
 
 function startCycle() {
-    if (!isInBrowser)
+    if (!isInBrowser && !isD8)
         throw new Error("Only works in browser");
 
     const tests = [
@@ -75,7 +76,6 @@ function startCycle() {
 
     for (let test of tests)
         startWorker(test);
-
 }
 
 
