@@ -482,7 +482,7 @@ class Driver {
     }
 
     async prefetchResourcesForBrowser() {
-        if (!isInBrowser)
+        if (!isInBrowser && !isD8)
             return;
 
         const promises = [];
@@ -776,8 +776,13 @@ class Benchmark {
 
         if (this.plan.preload) {
             let str = "";
-            for (let [variableName, blobUrl] of this.preloads)
-                str += `const ${variableName} = "${blobUrl}";\n`;
+            if (isD8) {
+                for (let [variableName, filePath] of Object.entries(this.plan.preload))
+                    str += `const ${variableName} = "${filePath}";\n`;
+            } else {
+                for (let [variableName, blobUrl] of this.preloads)
+                    str += `const ${variableName} = "${blobUrl}";\n`;
+            }
             addScript(str);
         }
 
@@ -902,6 +907,8 @@ class Benchmark {
     }
 
     prefetchResourcesForBrowser() {
+        if (isD8)
+          return this.prefetchResourcesForD8();
         if (!isInBrowser)
             return;
         const promises = this.plan.files.map((file) => this.loadBlob("file", null, file).then((blobData) => {
@@ -966,6 +973,10 @@ class Benchmark {
         }
 
         return !counter.failedPreloadResources && counter.loadedResources == counter.totalResources;
+    }
+
+    prefetchResourcesForD8() {
+        // For d8 we just keep the file name
     }
 
     async retryPrefetchResourcesForBrowser() {
