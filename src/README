@@ -1,0 +1,21 @@
+This directory contains the C/C++ source code for the JetStream asm.js benchmarks only.
+
+The included Makefile can generate:
+
+  - native binaries (using g++ -O3)
+  - wasm            (using Emscripten emcc)
+  - asm.js          (using Emscripten emcc)
+
+Binaries and JS files are generated into:
+   out/native
+   out/wasm
+   out/asmjs
+
+The native executables can be run directly:
+
+% code out/native && ./towers
+
+The JS files can be run directly in d8:
+
+% cd out/wasm && d8 ./towers.js
+% cd out/asmjs && d8 ./towers.js

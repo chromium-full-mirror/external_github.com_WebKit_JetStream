@@ -1,3 +1,5 @@
-# JetStream Clone
+# JetStream 1.1
+The JetStream subdirectory is a mirror of http://browserbench.org/JetStream1.1/
+on 2014-11-14.
 
-This is a clone from the upstream (webkit repository)[https://github.com/WebKit/WebKit/tree/main/Websites/browserbench.org/JetStream2.2]
+https://github.com/WebKit/webkit/tree/main/PerformanceTests/JetStream
