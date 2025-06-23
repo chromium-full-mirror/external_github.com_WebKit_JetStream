@@ -70,6 +70,7 @@ this.currentReject = null;
 
 let showScoreDetails = false;
 let categoryScores = null;
+let categoryTimes = null;
 
 function displayCategoryScores() {
     if (!categoryScores)
@@ -179,15 +180,7 @@ function uiFriendlyScore(num) {
 
 function uiFriendlyDuration(time)
 {
-    const minutes = time.getMinutes();
-    const seconds = time.getSeconds();
-    const milliSeconds = time.getMilliseconds();
-    let result = "" + minutes + ":";
-
-    result = result + (seconds < 10 ? "0" : "") + seconds + ".";
-    result = result + (milliSeconds < 10 ? "00" : (milliSeconds < 100 ? "0" : "")) + milliSeconds;
-
-    return result;
+    return time.toFixed(3) + " ms";
 }
 
 const fileLoader = (function() {
@@ -281,7 +274,7 @@ class Driver {
             }
 
             benchmark.updateUIAfterRun();
-            console.log(benchmark.name)
+            console.log("")
 
             if (isInBrowser) {
                 const cache = JetStream.blobDataCache;
@@ -304,18 +297,28 @@ class Driver {
         }
 
         const allScores = [];
-        for (const benchmark of this.benchmarks)
+        const allTimes = [];
+        for (const benchmark of this.benchmarks) {
             allScores.push(benchmark.score);
+            allTimes.push(benchmark.mean);
+        }
 
-        categoryScores = new Map;
+        categoryScores = new Map();
+        categoryTimes = new Map();
         for (const benchmark of this.benchmarks) {
             for (let category of Object.keys(benchmark.subScores()))
                 categoryScores.set(category, []);
+            for (let category of Object.keys(benchmark.subTimes()))
+                categoryTimes.set(category, []);
         }
 
         for (const benchmark of this.benchmarks) {
             for (let [category, value] of Object.entries(benchmark.subScores())) {
                 const arr = categoryScores.get(category);
+                arr.push(value);
+            }
+            for (let [category, value] of Object.entries(benchmark.subTimes())) {
+                let arr = categoryTimes.get(category);
                 arr.push(value);
             }
         }
@@ -329,10 +332,17 @@ class Driver {
             statusElement.innerHTML = '';
         } else if (!dumpJSONResults) {
             console.log("\n");
-            for (let [category, scores] of categoryScores)
-                console.log(`${category}: ${uiFriendlyScore(geomean(scores))}`);
-
-            console.log("\nTotal Score: ", uiFriendlyScore(geomean(allScores)), "\n");
+            console.log("Mean-Times:");
+            for (let [category, times] of categoryTimes) {
+                console.log(`    ${category}-Time: ${uiFriendlyDuration(geomean(times))}`);
+            }
+            console.log("Mean-Scores:");
+            for (let [category, scores] of categoryScores) {
+                console.log(`    ${category}-Score: ${uiFriendlyNumber(geomean(scores))}`);
+            }
+            console.log("\nTotals:");
+            console.log("    Total-Time:", uiFriendlyDuration(geomean(allTimes)));
+            console.log("    Total-Score:", uiFriendlyNumber(geomean(allScores)));
         }
 
         this.reportScoreToRunBenchmarkRunner();
@@ -1098,6 +1108,18 @@ class DefaultBenchmark extends Benchmark {
         return geomean([this.firstIterationScore, this.worst4Score, this.averageScore]);
     }
 
+    get mean() {
+        return geomean([this.firstIterationTime, this.worst4Time, this.averageTime]);
+    }
+
+    subTimes() {
+        return {
+            "First": this.firstIterationTime,
+            "Worst": this.worst4Tim,
+            "Average": this.averageTim,
+        };
+    }
+
     subScores() {
         return {
             "First": this.firstIterationScore,
@@ -1128,15 +1150,19 @@ class DefaultBenchmark extends Benchmark {
         if (dumpJSONResults)
             return;
 
-        console.log("    Startup:", uiFriendlyScore(this.firstIterationScore));
-        console.log("    Worst Case:", uiFriendlyScore(this.worst4Score));
-        console.log("    Average:", uiFriendlyScore(this.averageScore));
-        console.log("    Score:", uiFriendlyScore(this.score));
+        console.log(this.name, "Startup:", uiFriendlyDuration(this.firstIterationTime));
+        console.log(this.name, "Startup-Score:", uiFriendlyNumber(this.firstIterationScore));
+        console.log(this.name, "Worst-Case:", uiFriendlyDuration(this.worst4Time));
+        console.log(this.name, "Worst-Case-Score:", uiFriendlyNumber(this.worst4Score));
+        console.log(this.name, "Average:", uiFriendlyDuration(this.averageTime));
+        console.log(this.name, "Average-Score:", uiFriendlyNumber(this.averageScore));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Wall time:", uiFriendlyDuration(new Date(this.endTime - this.startTime)));
+        console.log(this.name, "Wall-Time:", uiFriendlyDuration(this.endTime - this.startTime));
     }
 }
 
@@ -1285,6 +1311,10 @@ class WSLBenchmark extends Benchmark {
         return geomean([this.stdlibScore, this.mainRunScore]);
     }
 
+    get mean() {
+        return geomean([this.stdlibTime, this.mainRunTime]);
+    }
+
     get runnerCode() {
         return `
             let benchmark = new Benchmark();
@@ -1317,6 +1347,13 @@ class WSLBenchmark extends Benchmark {
             `;
     }
 
+    subTimes() {
+        return {
+            "Stdlib": this.stdlibTime,
+            "MainRun": this.mainRunTime,
+        };
+    }
+
     subScores() {
         return {
             "Stdlib": this.stdlibScore,
@@ -1345,14 +1382,17 @@ class WSLBenchmark extends Benchmark {
         if (dumpJSONResults)
             return;
 
-        console.log("    Stdlib:", uiFriendlyScore(this.stdlibScore));
-        console.log("    Tests:", uiFriendlyScore(this.mainRunScore));
-        console.log("    Score:", uiFriendlyScore(this.score));
+        console.log(this.name, "Stdlib:", uiFriendlyDuration(this.stdlibTime));
+        console.log(this.name, "Stdlib-Score:", uiFriendlyNumber(this.stdlibScore));
+        console.log(this.name, "Tests:", uiFriendlyDuration(this.mainRunTime));
+        console.log(this.name, "Tests-Score:", uiFriendlyNumber(this.mainRunScore));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current-Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak-Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Wall time:", uiFriendlyDuration(new Date(this.endTime - this.startTime)));
+        console.log(this.name, "Wall-Time:", uiFriendlyDuration(this.endTime - this.startTime));
     }
 };
 
@@ -1371,6 +1411,10 @@ class WasmLegacyBenchmark extends Benchmark {
         this.startupScore= toScore(results[0]);
         this.runTime = results[1];
         this.runScore = toScore(results[1]);
+    }
+
+    get mean() {
+        return geomean([this.startupTime, this.runTime]);
     }
 
     get score() {
@@ -1493,6 +1537,13 @@ class WasmLegacyBenchmark extends Benchmark {
         return str;
     }
 
+    subTimes() {
+        return {
+            "Startup": this.startupTime,
+            "Runtime": this.runTime,
+        };
+    }
+
     subScores() {
         return {
             "Startup": this.startupScore,
@@ -1531,14 +1582,16 @@ class WasmLegacyBenchmark extends Benchmark {
         if (dumpJSONResults)
             return;
 
-        console.log("    Startup:", uiFriendlyScore(this.startupScore));
-        console.log("    Run time:", uiFriendlyScore(this.runScore));
-        console.log("    Score:", uiFriendlyScore(this.score));
+        console.log(this.name, "Startup:", uiFriendlyDuration(this.startupTime));
+        console.log(this.name, "Startup-Score:", uiFriendlyNumber(this.startupScore));
+        console.log(this.name, "Run-Time:", uiFriendlyDuration(this.runTime));
+        console.log(this.name, "Run-Time-Score:", uiFriendlyNumber(this.runScore));
         if (RAMification) {
-            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
+            console.log(this.name, "Current-Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log(this.name, "Peak-Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        console.log("    Wall time:", uiFriendlyDuration(new Date(this.endTime - this.startTime)));
+        console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
+        console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
     }
 };
 
