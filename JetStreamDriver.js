@@ -1115,8 +1115,8 @@ class DefaultBenchmark extends Benchmark {
     subTimes() {
         return {
             "First": this.firstIterationTime,
-            "Worst": this.worst4Tim,
-            "Average": this.averageTim,
+            "Worst": this.worst4Time,
+            "Average": this.averageTime,
         };
     }
 
