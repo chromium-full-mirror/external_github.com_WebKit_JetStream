@@ -262,7 +262,7 @@ class Driver {
 
         await updateUI();
 
-        let start = Date.now();
+        let start = performance.now();
         for (let benchmark of this.benchmarks) {
             benchmark.updateUIBeforeRun();
 
@@ -372,7 +372,10 @@ class Driver {
             } else
                 globalObject = runString("");
 
-            globalObject.console = {log:globalObject.print}
+            globalObject.console = {
+                log:globalObject.print,
+                assert: (x)=>{if(!x) throw new Error("Assertion failed");}
+            }
             globalObject.top = {
                 currentResolve,
                 currentReject
@@ -428,7 +431,7 @@ class Driver {
         for (let f = 0; f < 5; f++)
             text += `<div class="benchmark fill"></div>`;
 
-        let timestamp = Date.now();
+        let timestamp = performance.now();
         document.getElementById('jetstreams').style.backgroundImage = `url('jetstreams.svg?${timestamp}')`;
         let resultsTable = document.getElementById("results");
         resultsTable.innerHTML = text;
@@ -659,6 +662,23 @@ class Benchmark {
                     performance.measure(name, mark.name);
             }
         `);
+        // Crypto benchmarks in SeaMonster behave differently without
+        // window.crypto.getRandomValues() (array access are monomorphic vs
+        // polymorphic in the browser).
+        if (!isInBrowser && this.plan.testGroup === SeaMonsterGroup) {
+          addScript(`
+              const window = {
+                crypto: {
+                  getRandomValues: function(a) {
+                    for (let i = 0, l = a.length; i < l; i++) {
+                      a[i] = Math.floor(Math.random() * 256);
+                    }
+                    return a;
+                  }
+                }
+              }
+          `);
+        }
 
         if (!!this.plan.deterministicRandom) {
             addScript(`
@@ -720,7 +740,7 @@ class Benchmark {
         addScript(this.runnerCode);
 
         let startMark = performance.mark(this.name);
-        this.startTime = new Date();
+        this.startTime = performance.now();
 
         if (RAMification)
             resetMemoryPeak();
@@ -734,7 +754,7 @@ class Benchmark {
         }
         let results = await promise;
 
-        this.endTime = new Date();
+        this.endTime = performance.now();
         performanceMeasure(this.name, startMark);
 
         if (RAMification) {
@@ -1119,9 +1139,9 @@ class WSLBenchmark extends Benchmark {
                 const markLabel = "${this.name}-stdlib";
                 const startMark = performance.mark(markLabel);
 
-                let start = Date.now();
+                let start = performance.now();
                 benchmark.buildStdlib();
-                results.push(Date.now() - start);
+                results.push(performance.now() - start);
 
                 performanceMeasure(markLabel, startMark);
             }
@@ -1130,9 +1150,9 @@ class WSLBenchmark extends Benchmark {
                 const markLabel = "${this.name}-mainRun";
                 const startMark = performance.mark(markLabel);
 
-                let start = Date.now();
+                let start = performance.now();
                 benchmark.run();
-                results.push(Date.now() - start);
+                results.push(performance.now() - start);
 
                 performanceMeasure(markLabel, startMark);
             }
@@ -1225,7 +1245,7 @@ class WasmBenchmark extends Benchmark {
 
             let globalObject = this;
 
-            globalObject.benchmarkTime = Date.now.bind(Date);
+            globalObject.benchmarkTime = performance.now.bind(performance);
 
             globalObject.reportCompileTime = (t) => {
                 if (compileTime !== null)
@@ -1958,7 +1978,8 @@ function addTestByName(testName)
     if (plan)
         JetStream.addPlan(plan, plan.benchmarkClass);
     else
-        throw "Couldn't find test named \"" +  testName + "\"";
+        throw "Couldn't find test named \"" +  testName + "\"" +
+            "Valid values:\n    " + Array.from(testsByName.keys()).join('\n    ');
 }
 
 function addTestsByGroup(group)
@@ -1966,7 +1987,8 @@ function addTestsByGroup(group)
     let testList = testsByGroup.get(group);
 
     if (!testList)
-        throw "Couldn't find test group named: \"" + Symbol.keyFor(group) + "\"";
+        throw "Couldn't find test group named: \"" + Symbol.keyFor(group) + "\""+
+            "Valid values:\n    " + Array.from(testsByGroup.keys()).join('\n    ');
 
     for (let testName of testList)
         addTestByName(testName);
