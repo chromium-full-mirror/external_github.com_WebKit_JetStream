@@ -116,7 +116,7 @@ if (isInBrowser) {
 
 function assert(b, m = "") {
     if (!b)
-        throw new Error("Bad assertion: " + m);
+        throw new Error(`Bad assertion: ${m}`);
 }
 
 function firstID(benchmark) {
@@ -178,9 +178,8 @@ function uiFriendlyScore(num) {
     return uiFriendlyNumber(num);
 }
 
-function uiFriendlyDuration(time)
-{
-    return time.toFixed(3) + " ms";
+function uiFriendlyDuration(time) {
+    return `${time.toFixed(3)} ms`;
 }
 
 const fileLoader = (function() {
@@ -325,7 +324,7 @@ class Driver {
 
         if (isInBrowser) {
             summaryElement.classList.add('done');
-            summaryElement.innerHTML = "<div class=\"score\">" + uiFriendlyScore(geomean(allScores)) + "</div><label>Score</label>";
+            summaryElement.innerHTML = `<div class="score">${uiFriendlyScore(geomean(allScores))}</div><label>Score</label>`;
             summaryElement.onclick = displayCategoryScores;
             if (showScoreDetails)
                 displayCategoryScores();
@@ -402,7 +401,7 @@ class Driver {
 
         const magicFrame = magic.contentDocument.getElementById("magicframe");
         magicFrame.contentDocument.open();
-        magicFrame.contentDocument.write("<!DOCTYPE html><head><title>benchmark payload</title></head><body>\n" + string + "</body></html>");
+        magicFrame.contentDocument.write(`<!DOCTYPE html><head><title>benchmark payload</title></head><body>\n${string}</body></html>`);
 
         return magicFrame;
     }
@@ -661,9 +660,6 @@ class Benchmark {
             let benchmarkName = "${this.name}";
 
             for (let i = 0; i < ${this.iterations}; i++) {
-                if (__benchmark.prepareForNextIteration)
-                    __benchmark.prepareForNextIteration();
-
                 ${this.preIterationCode}
 
                 const iterationMarkLabel = benchmarkName + "-iteration-" + i;
@@ -679,8 +675,7 @@ class Benchmark {
 
                 results.push(Math.max(1, end - start));
             }
-            if (__benchmark.validate)
-                __benchmark.validate(${this.iterations});
+            __benchmark.validate?.(${this.iterations});
             top.currentResolve(results);`;
     }
 
@@ -695,7 +690,7 @@ class Benchmark {
     get prerunCode() { return null; }
 
     get preIterationCode() {
-        let code = "";
+        let code = `__benchmark.prepareForNextIteration?.();`;
         if (this.plan.deterministicRandom)
             code += `Math.random.__resetSeed();`;
 
@@ -790,8 +785,8 @@ class Benchmark {
                 for (let [variableName, filePath] of Object.entries(this.plan.preload))
                     str += `const ${variableName} = "${filePath}";\n`;
             } else {
-                for (let [variableName, blobUrl] of this.preloads)
-                    str += `const ${variableName} = "${blobUrl}";\n`;
+                for (let [ variableName, blobURLOrPath ] of this.preloads)
+                    str += `const ${variableName} = "${blobURLOrPath}";\n`;
             }
             addScript(str);
         }
@@ -1015,9 +1010,15 @@ class Benchmark {
         if (this._resourcesPromise)
             return this._resourcesPromise;
 
-        const filePromises = !isInBrowser ? this.plan.files.map((file) => fileLoader.load(file)) : [];
+        this.preloads = [];
 
-        const promise = Promise.all(filePromises).then((texts) => {
+        if (isInBrowser) {
+            this._resourcesPromise = Promise.resolve();
+            return this._resourcesPromise;
+        }
+
+        const filePromises = this.plan.files.map((file) => fileLoader.load(file));
+        this._resourcesPromise = Promise.all(filePromises).then((texts) => {
             if (isInBrowser)
                 return;
             this.scripts = [];
@@ -1026,10 +1027,11 @@ class Benchmark {
                 this.scripts.push(text);
         });
 
-        this.preloads = [];
-        this.blobs = [];
+        if (this.plan.preload) {
+            for (const prop of Object.getOwnPropertyNames(this.plan.preload))
+                this.preloads.push([ prop, this.plan.preload[prop] ]);
+        }
 
-        this._resourcesPromise = promise;
         return this._resourcesPromise;
     }
 
@@ -1167,12 +1169,56 @@ class DefaultBenchmark extends Benchmark {
 }
 
 class AsyncBenchmark extends DefaultBenchmark {
+    get prerunCode() {
+        let str = "";
+        // FIXME: It would be nice if these were available to any benchmark not just async ones but since these functions
+        // are async they would only work in a context where the benchmark is async anyway. Long term, we should do away
+        // with this class and make all benchmarks async.
+        if (isInBrowser) {
+            str += `
+                async function getBinary(blobURL) {
+                    const response = await fetch(blobURL);
+                    return new Int8Array(await response.arrayBuffer());
+                }
+
+                async function getString(blobURL) {
+                    const response = await fetch(blobURL);
+                    return response.text();
+                }
+
+                async function dynamicImport(blobURL) {
+                    return await import(blobURL);
+                }
+            `;
+        } else {
+            str += `
+                async function getBinary(path) {
+                    return new Int8Array(read(path, "binary"));
+                }
+
+                async function getString(path) {
+                    return read(path);
+                }
+
+                async function dynamicImport(path) {
+                    try {
+                        return await import(path);
+                    } catch (e) {
+                        // In shells, relative imports require different paths, so try with and
+                        // without the "./" prefix (e.g., JSC requires it).
+                        return await import(path.slice("./".length))
+                    }
+                }
+            `;
+        }
+        return str;
+    }
+
     get runnerCode() {
         return `
         async function doRun() {
             let __benchmark = new Benchmark();
-            if (__benchmark.init)
-                await __benchmark.init();
+            await __benchmark.init?.();
             let results = [];
             let benchmarkName = "${this.name}";
 
@@ -1192,8 +1238,7 @@ class AsyncBenchmark extends DefaultBenchmark {
 
                 results.push(Math.max(1, end - start));
             }
-            if (__benchmark.validate)
-                __benchmark.validate(${this.iterations});
+            __benchmark.validate?.(${this.iterations});
             top.currentResolve(results);
         }
         doRun().catch((error) => { top.currentReject(error); });`
@@ -1234,57 +1279,18 @@ class WasmEMCCBenchmark extends AsyncBenchmark {
                     Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
                 },
             };
+
             globalObject.Module = Module;
-            `;
-        return str;
-    }
+            ${super.prerunCode};
+        `;
 
-    // FIXME: Why is this part of the runnerCode and not prerunCode?
-    get runnerCode() {
-        let str = `function loadBlob(key, path, andThen) {`;
-
-        if (isInBrowser) {
+        if (isSpiderMonkey) {
             str += `
-                var xhr = new XMLHttpRequest();
-                xhr.open('GET', path, true);
-                xhr.responseType = 'arraybuffer';
-                xhr.onload = function() {
-                    Module[key] = new Int8Array(xhr.response);
-                    andThen();
-                };
-                xhr.send(null);
-            `;
-        } else {
-            str += `
-            Module[key] = new Int8Array(read(path, "binary"));
-
-            Module.setStatus = null;
-            Module.monitorRunDependencies = null;
-
-            Promise.resolve(42).then(() => {
-                try {
-                    andThen();
-                } catch(e) {
-                    console.log("error running wasm:", e);
-                    console.log(e.stack);
-                    throw e;
-                }
-            })
+                // Needed because SpiderMonkey shell doesn't have a setTimeout.
+                Module.setStatus = null;
+                Module.monitorRunDependencies = null;
             `;
         }
-
-        str += "}";
-
-        let keys = Object.keys(this.plan.preload);
-        for (let i = 0; i < keys.length; ++i) {
-            str += `loadBlob("${keys[i]}", "${this.plan.preload[keys[i]]}", async () => {\n`;
-        }
-
-        str += super.runnerCode;
-        for (let i = 0; i < keys.length; ++i) {
-            str += `})`;
-        }
-        str += `;`;
 
         return str;
     }
@@ -1592,6 +1598,7 @@ class WasmLegacyBenchmark extends Benchmark {
         }
         console.log(this.name, "Total-Score:", uiFriendlyNumber(this.score));
         console.log(this.name, "Total-Mean:", uiFriendlyDuration(this.mean));
+        console.log(this.name, "Wall time:", uiFriendlyDuration(this.endTime - this.startTime));
     }
 };
 
@@ -1649,7 +1656,7 @@ let BENCHMARKS = [
         iterations: 60,
         tags: ["ARES"],
     }),
-    new DefaultBenchmark({
+    new AsyncBenchmark({
         name: "Babylon",
         files: [
             "./ARES-6/Babylon/index.js"
@@ -1685,7 +1692,7 @@ let BENCHMARKS = [
         tags: ["CDJS"],
     }),
     // CodeLoad
-    new DefaultBenchmark({
+    new AsyncBenchmark({
         name: "first-inspector-code-load",
         files: [
             "./code-load/code-first-load.js"
@@ -1695,7 +1702,7 @@ let BENCHMARKS = [
         },
         tags: ["CodeLoad"],
     }),
-    new DefaultBenchmark({
+    new AsyncBenchmark({
         name: "multi-inspector-code-load",
         files: [
             "./code-load/code-multi-load.js"
@@ -2155,7 +2162,8 @@ let BENCHMARKS = [
             "./Dart/benchmark.js",
         ],
         preload: {
-            wasmBinary: "./Dart/build/flute.dart2wasm.wasm"
+            jsModule: "./Dart/build/flute.dart2wasm.mjs",
+            wasmBinary: "./Dart/build/flute.dart2wasm.wasm",
         },
         iterations: 15,
         worstCaseCount: 2,
