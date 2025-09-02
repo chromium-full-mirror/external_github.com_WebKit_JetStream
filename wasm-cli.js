@@ -34,10 +34,8 @@ testList = [
   "tfjs-wasm-simd",
   "argon2-wasm",
   "8bitbench-wasm",
-  "Dart-flute-complex-wasm",
-  "Dart-flute-todomvc-wasm",
+  "Dart-flute-wasm",
   "zlib-wasm",
-  "Kotlin-compose-wasm",
 ];
 
 // Reuse the full CLI runner, just with the subset of Wasm line items above.

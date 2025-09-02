@@ -5,7 +5,7 @@
 
 class Benchmark {
     async init() {
-        Module.wasmBinary = await JetStream.getBinary(JetStream.preload.wasmBinary);
+        Module.wasmBinary = await getBinary(wasmBinary);
     }
 
     async runIteration() {

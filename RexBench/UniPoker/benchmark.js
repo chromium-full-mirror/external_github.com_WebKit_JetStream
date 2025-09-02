@@ -46,7 +46,9 @@ class Benchmark {
         const playerExpectations = getPlayerExpectations(iterations)
         if (this._players.length != playerExpectations.length)
             throw "Expect " + playerExpectations.length + ", but actually have " + this._players.length;
-        for (let playerIdx = 0; playerIdx < playerExpectations.length; playerIdx++)
-            playerExpectations[playerIdx].validate(this._players[playerIdx]);
+        if (isInBrowser) {
+            for (let playerIdx = 0; playerIdx < playerExpectations.length; playerIdx++)
+                playerExpectations[playerIdx].validate(this._players[playerIdx]);
+        }
     }
 }

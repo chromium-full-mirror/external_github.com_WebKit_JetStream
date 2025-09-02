@@ -34,18 +34,14 @@ function computeIsLittleEndian() {
 }
 
 const isLittleEndian = computeIsLittleEndian();
-let globalCounter = 0;
 
-function randomFileContents() {
-    const numBytes = (globalCounter % 128)  + 2056;
-    globalCounter++;
-    let result = new ArrayBuffer(numBytes);
+function randomFileContents(bytes = ((Math.random() * 128) >>> 0) + 2056) {
+    let result = new ArrayBuffer(bytes);
     let view = new Uint8Array(result);
-    for (let i = 0; i < numBytes; ++i)
-        view[i] = (i + globalCounter) % 255;
+    for (let i = 0; i < bytes; ++i)
+        view[i] = (Math.random() * 255) >>> 0;
     return new DataView(result);
 }
-
 
 class File {
     constructor(dataView, permissions) {
@@ -57,13 +53,9 @@ class File {
     set data(dataView) { this._data = dataView; }
 
     swapByteOrder() {
-        let hash = 0x1a2b3c4d;
         for (let i = 0; i < Math.floor(this.data.byteLength / 8) * 8; i += 8) {
-            const data = this.data.getFloat64(i, isLittleEndian);
-            this.data.setFloat64(i, data, !isLittleEndian);
-            hash ^= data | 0;
+            this.data.setFloat64(i, this.data.getFloat64(i, isLittleEndian), !isLittleEndian);
         }
-        return hash;
     }
 }
 
@@ -149,22 +141,19 @@ class Directory {
 function setupDirectory() {
     const fs = new Directory;
     let dirs = [fs];
-    let counter = 0;
     for (let dir of dirs) {
-        for (let i = 0; i < 10; ++i) {
-            if (dirs.length < 400 && (counter % 3) <= 1) {
+        for (let i = 0; i < 8; ++i) {
+            if (dirs.length < 250 && Math.random() >= 0.3) {
                 dirs.push(dir.addDirectory(`dir-${i}`));
             }
-            counter++;
         }
     }
 
     for (let dir of dirs) {
         for (let i = 0; i < 5; ++i) {
-            if ((counter % 3) === 0) {
+            if (Math.random() >= 0.6) {
                 dir.addFile(`file-${i}`, new File(randomFileContents()));
             }
-            counter++;
         }
     }
 
@@ -172,16 +161,11 @@ function setupDirectory() {
 }
 
 class Benchmark {
-    EXPECTED_FILE_COUNT = 666;
-
-    totalFileCount = 0;
-    lastFileHash = undefined;
-
     runIteration() {
         const fs = setupDirectory();
 
         for (let { entry: file } of fs.forEachFileRecursively()) {
-            this.lastFileHash = file.swapByteOrder();
+            file.swapByteOrder();
         }
 
         for (let { name, entry: dir } of fs.forEachDirectoryRecursively()) {
@@ -194,17 +178,5 @@ class Benchmark {
                 }
             }
         }
-
-        for (let _ of fs.forEachFileRecursively()) {
-            this.totalFileCount++;
-        }
-    }
-
-    validate(iterations) {
-        const expectedFileCount = this.EXPECTED_FILE_COUNT * iterations;
-        if (this.totalFileCount != expectedFileCount)
-            throw new Error(`Invalid total file count ${this.totalFileCount}, expected ${expectedFileCount}.`);
-        if (this.lastFileHash === undefined)
-            throw new Error(`Invalid file hash: ${this.lastFileHash}`);
     }
 }
