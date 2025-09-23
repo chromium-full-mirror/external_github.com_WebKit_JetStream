@@ -599,10 +599,8 @@ class AsyncTaskWorker {
         else {
             var self = this;
             setTimeout(function () {
-                if (self._currentTaskId == null) {
+                if (self._currentTaskId == null)
                     AsyncTaskWorker._workerSet.delete(self);
-                     self._webWorker.terminate();
-                }
             }, 1000);
         }
 

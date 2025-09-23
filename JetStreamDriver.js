@@ -30,84 +30,50 @@ const measureTotalTimeAsSubtest = false; // Once we move to preloading all resou
 const defaultIterationCount = 120;
 const defaultWorstCaseCount = 4;
 
-globalThis.performance ??= Date;
-globalThis.RAMification ??= false;
-globalThis.testIterationCount ??= undefined;
-globalThis.testIterationCountMap ??= new Map();
-globalThis.testWorstCaseCount ??= undefined;
-globalThis.testWorstCaseCountMap ??= new Map();
-globalThis.dumpJSONResults ??= false;
-globalThis.testList ??= undefined;
-globalThis.startDelay ??= undefined;
-globalThis.shouldReport ??= false;
-globalThis.prefetchResources ??= true;
-
-function getIntParam(urlParams, key) {
-    const rawValue = urlParams.get(key);
-    const value = parseInt(rawValue);
-    if (value <= 0)
-        throw new Error(`Expected positive value for ${key}, but got ${rawValue}`);
-    return value;
-}
-
-function getBoolParam(urlParams, key) {
-    const rawValue = urlParams.get(key).toLowerCase()
-    return !(rawValue === "false" || rawValue === "0")
- }
-
-function getTestListParam(urlParams, key) {
-    if (globalThis.testList?.length)
-        throw new Error(`Overriding previous testList=${globalThis.testList.join()} with ${key} url-parameter.`);
-    return urlParams.getAll(key);
-}
-
-if (typeof(URLSearchParams) !== "undefined") {
-    const urlParameters = new URLSearchParams(window.location.search);
-    if (urlParameters.has("report"))
-        globalThis.shouldReport = urlParameters.get("report").toLowerCase() == "true";
-    if (urlParameters.has("startDelay"))
-        globalThis.startDelay = getIntParam(urlParameters, "startDelay");
-    if (globalThis.shouldReport && !globalThis.startDelay)
-        globalThis.startDelay = 4000;
-    if (urlParameters.has("tag"))
-        globalThis.testList = getTestListParam(urlParameters, "tag");
-    if (urlParameters.has("test"))
-        globalThis.testList = getTestListParam(urlParameters, "test");
-    if (urlParameters.has("iterationCount"))
-        globalThis.testIterationCount = getIntParam(urlParameters, "iterationCount");
-    if (urlParameters.has("worstCaseCount"))
-        globalThis.testWorstCaseCount = getIntParam(urlParameters, "worstCaseCount");
-    if (urlParameters.has("prefetchResources"))
-        globalThis.prefetchResources = getBoolParam(urlParameters, "prefetchResources");
-}
-
-if (!globalThis.prefetchResources)
+if (!JetStreamParams.prefetchResources)
     console.warn("Disabling resource prefetching!");
 
 // Used for the promise representing the current benchmark run.
 this.currentResolve = null;
 this.currentReject = null;
 
+let showScoreDetails = false;
+let categoryScores = null;
+
 function displayCategoryScores() {
-    document.body.classList.add("details");
+    if (!categoryScores)
+        return;
+
+    let scoreDetails = `<div class="benchmark benchmark-done">`;
+    for (let [category, scores] of categoryScores) {
+        scoreDetails += `<span class="result">
+                <span>${uiFriendlyScore(geomeanScore(scores))}</span>
+                <label>${category}</label>
+            </span>`;
+    }
+    scoreDetails += "</div>";
+    let summaryElement = document.getElementById("result-summary");
+    summaryElement.innerHTML += scoreDetails;
+
+    categoryScores = null;
 }
 
 function getIterationCount(plan) {
-    if (testIterationCountMap.has(plan.name))
-        return testIterationCountMap.get(plan.name);
-    if (globalThis.testIterationCount)
-        return globalThis.testIterationCount;
+    if (JetStreamParams.testIterationCountMap.has(plan.name))
+        return JetStreamParams.testIterationCountMap.get(plan.name);
+    if (JetStreamParams.testIterationCount)
+        return JetStreamParams.testIterationCount;
     if (plan.iterations)
         return plan.iterations;
     return defaultIterationCount;
 }
 
 function getWorstCaseCount(plan) {
-    if (testWorstCaseCountMap.has(plan.name))
-        return testWorstCaseCountMap.get(plan.name);
-    if (globalThis.testWorstCaseCount)
-        return globalThis.testWorstCaseCount;
-    if (plan.worstCaseCount)
+    if (JetStreamParams.testWorstCaseCountMap.has(plan.name))
+        return JetStreamParams.testWorstCaseCountMap.get(plan.name);
+    if (JetStreamParams.testWorstCaseCount)
+        return JetStreamParams.testWorstCaseCount;
+    if (plan.worstCaseCount !== undefined)
         return plan.worstCaseCount;
     return defaultWorstCaseCount;
 }
@@ -115,23 +81,19 @@ function getWorstCaseCount(plan) {
 if (isInBrowser) {
     document.onkeydown = (keyboardEvent) => {
         const key = keyboardEvent.key;
-        if (key === "d" || key === "D")
+        if (key === "d" || key === "D") {
+            showScoreDetails = true;
             displayCategoryScores();
+        }
     };
 }
 
-function sum(values) {
+function mean(values) {
     console.assert(values instanceof Array);
     let sum = 0;
     for (let x of values)
         sum += x;
-    return sum;
-}
-
-
-function mean(values) {
-    const totalSum = sum(values)
-    return totalSum / values.length;
+    return sum / values.length;
 }
 
 function geomeanScore(values) {
@@ -173,7 +135,7 @@ function uiFriendlyScore(num) {
 }
 
 function uiFriendlyDuration(time) {
-    return `${time.toFixed(2)} ms`;
+    return `${time.toFixed(3)} ms`;
 }
 
 // TODO: Cleanup / remove / merge. This is only used for caching loads in the
@@ -188,7 +150,7 @@ class ShellFileLoader {
     // share common code.
     load(url) {
         console.assert(!isInBrowser);
-        if (!globalThis.prefetchResources)
+        if (!JetStreamParams.prefetchResources)
             return `load("${url}");`
 
         if (this.requests.has(url)) {
@@ -227,7 +189,7 @@ class Driver {
         if (isInBrowser) {
             statusElement = document.getElementById("status");
             statusElement.innerHTML = `<label>Running...</label>`;
-        } else if (!dumpJSONResults)
+        } else if (!JetStreamParams.dumpJSONResults)
             console.log("Starting JetStream3");
 
         performance.mark("update-ui-start");
@@ -246,9 +208,8 @@ class Driver {
 
             performance.mark("update-ui");
             benchmark.updateUIAfterRun();
-            console.log("")
 
-            if (isInBrowser && globalThis.prefetchResources) {
+            if (isInBrowser && JetStreamParams.prefetchResources) {
                 const cache = JetStream.blobDataCache;
                 for (const file of benchmark.files) {
                     const blobData = cache[file];
@@ -264,7 +225,7 @@ class Driver {
         if (measureTotalTimeAsSubtest) {
             if (isInBrowser)
                 document.getElementById("benchmark-total-time-score").innerHTML = uiFriendlyNumber(totalTime);
-            else if (!dumpJSONResults)
+            else if (!JetStreamParams.dumpJSONResults)
                 console.log("Total time:", uiFriendlyNumber(totalTime));
             allScores.push(totalTime);
         }
@@ -276,13 +237,10 @@ class Driver {
             allScores.push(score);
         }
 
-        const categoryScores = new Map();
-        const categoryTimes = new Map();
+        categoryScores = new Map;
         for (const benchmark of this.benchmarks) {
             for (let category of Object.keys(benchmark.subScores()))
                 categoryScores.set(category, []);
-            for (let category of Object.keys(benchmark.subTimes()))
-                categoryTimes.set(category, []);
         }
 
         for (const benchmark of this.benchmarks) {
@@ -291,49 +249,25 @@ class Driver {
                 console.assert(value > 0, `Invalid ${benchmark.name} ${category} score: ${value}`);
                 arr.push(value);
             }
-            for (let [category, value] of Object.entries(benchmark.subTimes())) {
-                const arr = categoryTimes.get(category);
-                console.assert(value > 0, `Invalid ${benchmark.name} ${category} time: ${value}`);
-                arr.push(value);
-            }
         }
 
         const totalScore = geomeanScore(allScores);
         console.assert(totalScore > 0, `Invalid total score: ${totalScore}`);
 
         if (isInBrowser) {
-            let summaryHtml = `<div class="score">${uiFriendlyScore(totalScore)}</div>
-                    <label>Score</label>`;
-            summaryHtml += `<div class="benchmark benchmark-done">`;
-            for (let [category, scores] of categoryScores) {
-                summaryHtml += `<span class="result detail">
-                        <span>${uiFriendlyScore(geomeanScore(scores))}</span>
-                        <label>${category}</label>
-                    </span>`;
-            }
-            for (let [category, times] of categoryTimes) {
-                summaryHtml += `<span class="result detail">
-                        <span>${uiFriendlyDuration(geomeanScore(times))}</span>
-                        <label>${category}</label>
-                    </span>`;
-            }
-            summaryHtml += "</div>";
             const summaryElement = document.getElementById("result-summary");
             summaryElement.classList.add("done");
-            summaryElement.innerHTML = summaryHtml;
+            summaryElement.innerHTML = `<div class="score">${uiFriendlyScore(totalScore)}</div>
+                    <label>Score</label>`;
             summaryElement.onclick = displayCategoryScores;
+            if (showScoreDetails)
+                displayCategoryScores();
             statusElement.innerHTML = "";
-        } else if (!dumpJSONResults) {
-            console.log("Mean-Scores:");
+        } else if (!JetStreamParams.dumpJSONResults) {
+            console.log("\n");
             for (let [category, scores] of categoryScores)
-                console.log(`    ${category}-Score: ${uiFriendlyScore(geomeanScore(scores))}`);
-            console.log("Mean-Times:");
-            for (let [category, times] of categoryTimes)
-                console.log(`    ${category}-Time: ${uiFriendlyDuration(geomeanScore(times))}`);
-            console.log("");
-            console.log("Totals:");
-            console.log("    Total-Score: ", uiFriendlyScore(totalScore));
-            console.log("    Total-Time: ", uiFriendlyDuration(totalTime));
+                console.log(`${category}: ${uiFriendlyScore(geomeanScore(scores))}`);
+            console.log("\nTotal Score: ", uiFriendlyScore(totalScore), "\n");
         }
 
         this.reportScoreToRunBenchmarkRunner();
@@ -350,39 +284,32 @@ class Driver {
     prepareToRun() {
         this.benchmarks.sort((a, b) => a.plan.name.toLowerCase() < b.plan.name.toLowerCase() ? 1 : -1);
 
-        if (!isInBrowser)
-            return;
-
         let text = "";
         for (const benchmark of this.benchmarks) {
-            const scoreDescription = Object.keys(benchmark.allScores());
-            const timeDescription = Object.keys(benchmark.allTimes());
+            const description = Object.keys(benchmark.subScores());
+            description.push("Score");
 
             const scoreIds = benchmark.scoreIdentifiers();
             const overallScoreId = scoreIds.pop();
-            const timeIds = benchmark.timeIdentifiers();
 
-            text +=
-                `<div class="benchmark" id="benchmark-${benchmark.name}">
-                <h3 class="benchmark-name">${benchmark.name} <a class="info" href="in-depth.html#${benchmark.name}">i</a></h3>
-                <h4 class="score" id="${overallScoreId}">&nbsp;</h4>
-                <h4 class="plot" id="plot-${benchmark.name}">&nbsp;</h4>
-                <p>`;
-            for (let i = 0; i < scoreIds.length; i++) {
-                const scoreId = scoreIds[i];
-                const label = scoreDescription[i];
-                text += `<span class="result score"><span id="${scoreId}">&nbsp;</span><label>${label}</label></span>`
+            if (isInBrowser) {
+                text +=
+                    `<div class="benchmark" id="benchmark-${benchmark.name}">
+                    <h3 class="benchmark-name">${benchmark.name} <a class="info" href="in-depth.html#${benchmark.name}">i</a></h3>
+                    <h4 class="score" id="${overallScoreId}">&nbsp;</h4>
+                    <h4 class="plot" id="plot-${benchmark.name}">&nbsp;</h4>
+                    <p>`;
+                for (let i = 0; i < scoreIds.length; i++) {
+                    const scoreId = scoreIds[i];
+                    const label = description[i];
+                    text += `<span class="result"><span id="${scoreId}">&nbsp;</span><label>${label}</label></span>`
+                }
+                text += `</p></div>`;
             }
-            for (let i = 0; i < timeIds.length; i++) {
-                const timeId = timeIds[i];
-                const label = timeDescription[i];
-                text += `<span class="result detail"><span id="${timeId}">&nbsp;</span><label>${label}</label></span>`
-            }
-            text += `</p></div>`;
         }
 
-        for (let f = 0; f < 5; f++)
-            text += `<div class="benchmark fill"></div>`;
+        if (!isInBrowser)
+            return;
 
         const timestamp = performance.now();
         document.getElementById('jetstreams').style.backgroundImage = `url('jetstreams.svg?${timestamp}')`;
@@ -402,13 +329,12 @@ class Driver {
         if (!isInBrowser)
             return;
 
-        for (const id of benchmark.scoreIdentifiers())
+        for (const id of benchmark.scoreIdentifiers()) {
             document.getElementById(id).innerHTML = "error";
-        for (const id of benchmark.timeIdentifiers())
-            document.getElementById(id).innerHTML = "error";
-        const benchmarkResultsUI = document.getElementById(`benchmark-${benchmark.name}`);
-        benchmarkResultsUI.classList.remove("benchmark-running");
-        benchmarkResultsUI.classList.add("benchmark-error");
+            const benchmarkResultsUI = document.getElementById(`benchmark-${benchmark.name}`);
+            benchmarkResultsUI.classList.remove("benchmark-running");
+            benchmarkResultsUI.classList.add("benchmark-error");
+        }
     }
 
     pushError(name, error) {
@@ -427,8 +353,8 @@ class Driver {
         this.isReady = true;
         if (isInBrowser) {
             globalThis.dispatchEvent(new Event("JetStreamReady"));
-            if (typeof(globalThis.startDelay) !== "undefined") {
-                setTimeout(() => this.start(), globalThis.startDelay);
+            if (typeof(JetStreamParams.startDelay) !== "undefined") {
+                setTimeout(() => this.start(), JetStreamParams.startDelay);
             }
         }
     }
@@ -533,7 +459,7 @@ class Driver {
 
     dumpJSONResultsIfNeeded()
     {
-        if (dumpJSONResults) {
+        if (JetStreamParams.dumpJSONResults) {
             console.log("\n");
             console.log(this.resultsJSON());
             console.log("\n");
@@ -552,7 +478,7 @@ class Driver {
         if (!isInBrowser)
             return;
 
-        if (!globalThis.shouldReport)
+        if (!JetStreamParams.shouldReport)
             return;
 
         const content = this.resultsJSON();
@@ -599,6 +525,7 @@ class Scripts {
         this.add(`
             performance.mark ??= function(name) { return { name }};
             performance.measure ??= function() {};
+            performance.timeOrigin ??= performance.now();
         `);
     }
 
@@ -767,11 +694,6 @@ class Benchmark {
         };
     }
 
-    get isDone() {
-        return this._state == BenchmarkState.DONE || this._state == BenchmarkState.ERROR;
-    }
-    get isSuccess() { return this._state = BenchmarkState.DONE; }
-
     get runnerCode() {
         return `{
             const benchmark = new Benchmark(${JSON.stringify(this.benchmarkArguments)});
@@ -809,20 +731,7 @@ class Benchmark {
         return geomeanScore(subScores);
     }
 
-    get totalTime() {
-        const subTimes = Object.values(this.subTimes());
-        return sum(subTimes);
-    }
-
-    get wallTime() {
-        return this.endTime - this.startTime;
-    }
-
     subScores() {
-        throw new Error("Subclasses need to implement this");
-    }
-
-    subTimes() {
         throw new Error("Subclasses need to implement this");
     }
 
@@ -832,13 +741,6 @@ class Benchmark {
         return allScores;
     }
 
-    allTimes() {
-        const allTimes = this.subTimes();
-        allTimes["Total"] = this.totalTime;
-         allTimes["Wall-Time"] = this.wallTime;
-        return allTimes;
-    }
-
     get prerunCode() { return null; }
 
     get preIterationCode() {
@@ -846,8 +748,8 @@ class Benchmark {
         if (this.plan.deterministicRandom)
             code += `Math.random.__resetSeed();`;
 
-        if (globalThis.customPreIterationCode)
-            code += customPreIterationCode;
+        if (JetStreamParams.customPreIterationCode)
+            code += JetStreamParams.customPreIterationCode;
 
         return code;
     }
@@ -855,8 +757,8 @@ class Benchmark {
     get postIterationCode() {
         let code = "";
 
-        if (globalThis.customPostIterationCode)
-            code += customPostIterationCode;
+        if (JetStreamParams.customPostIterationCode)
+            code += JetStreamParams.customPostIterationCode;
 
         return code;
     }
@@ -890,7 +792,7 @@ class Benchmark {
         } else {
             const cache = JetStream.blobDataCache;
             for (const file of this.plan.files) {
-                scripts.addWithURL(globalThis.prefetchResources ? cache[file].blobURL : file);
+                scripts.addWithURL(JetStreamParams.prefetchResources ? cache[file].blobURL : file);
             }
         }
 
@@ -904,7 +806,7 @@ class Benchmark {
         performance.mark(this.name);
         this.startTime = performance.now();
 
-        if (RAMification)
+        if (JetStreamParams.RAMification)
             resetMemoryPeak();
 
         let magicFrame;
@@ -924,7 +826,7 @@ class Benchmark {
         this.endTime = performance.now();
         performance.measure(this.name, this.name);
 
-        if (RAMification) {
+        if (JetStreamParams.RAMification) {
             const memoryFootprint = MemoryFootprint();
             this.currentFootprint = memoryFootprint.current;
             this.peakFootprint = memoryFootprint.peak;
@@ -941,7 +843,7 @@ class Benchmark {
 
     async doLoadBlob(resource) {
         const blobData = JetStream.blobDataCache[resource];
-        if (!globalThis.prefetchResources) {
+        if (!JetStreamParams.prefetchResources) {
             blobData.blobURL = resource;
             return blobData;
         }
@@ -1068,10 +970,6 @@ class Benchmark {
         return !counter.failedPreloadResources && counter.loadedResources == counter.totalResources;
     }
 
-    prefetchResourcesForD8() {
-        // For d8 we just keep the file name
-    }
-
     async retryPrefetchResourcesForBrowser() {
         console.assert(isInBrowser);
 
@@ -1112,17 +1010,8 @@ class Benchmark {
         return `results-cell-${this.name}-${scoreName}`;
     }
 
-    timeIdentifiers() {
-        const ids = Object.keys(this.allTimes()).map(name => this.timeIdentifier(name));
-        return ids;
-    }
-
-    timeIdentifier(scoreName) {
-        return `results-cell-${this.name}-${scoreName}-time`;
-    }    
-
     updateUIBeforeRun() {
-        if (!dumpJSONResults)
+        if (!JetStreamParams.dumpJSONResults)
             console.log(`Running ${this.name}:`);
         if (isInBrowser)
             this.updateUIBeforeRunInBrowser();
@@ -1135,29 +1024,24 @@ class Benchmark {
 
         for (const id of this.scoreIdentifiers())
             document.getElementById(id).innerHTML = "...";
-        for (const id of this.timeIdentifiers())
-            document.getElementById(id).innerHTML = "...";
     }
 
     updateUIAfterRun() {
         const scoreEntries = Object.entries(this.allScores());
-        const timeEntries = Object.entries(this.allTimes());
         if (isInBrowser)
-            this.updateUIAfterRunInBrowser(scoreEntries, timeEntries);
-        if (dumpJSONResults)
+            this.updateUIAfterRunInBrowser(scoreEntries);
+        if (JetStreamParams.dumpJSONResults)
             return;
-        this.updateConsoleAfterRun(scoreEntries, timeEntries);
+        this.updateConsoleAfterRun(scoreEntries);
     }
 
-    updateUIAfterRunInBrowser(scoreEntries, timeEntries) {
+    updateUIAfterRunInBrowser(scoreEntries) {
         const benchmarkResultsUI = document.getElementById(`benchmark-${this.name}`);
         benchmarkResultsUI.classList.remove("benchmark-running");
         benchmarkResultsUI.classList.add("benchmark-done");
 
         for (const [name, value] of scoreEntries)
             document.getElementById(this.scoreIdentifier(name)).innerHTML = uiFriendlyScore(value);
-        for (const [name, value] of timeEntries)
-            document.getElementById(this.timeIdentifier(name)).innerHTML = uiFriendlyDuration(value);
 
         this.renderScatterPlot();
     }
@@ -1190,21 +1074,15 @@ class Benchmark {
         plotContainer.innerHTML = `<svg width="${width}px" height="${height}px">${circlesSVG}</svg>`;
     }
 
-    updateConsoleAfterRun(scoreEntries, timeEntries) {
+    updateConsoleAfterRun(scoreEntries) {
         for (let [name, value] of scoreEntries) {
-            if (!name.endsWith("Score"))
-                name += "-Score";
-            console.log(this.name, `${name}:`, uiFriendlyScore(value));
+             console.log(`    ${name}:`, uiFriendlyScore(value));
         }
-        for (let [name, value] of timeEntries) {
-            if (!name.endsWith("Time"))
-                name += "-Time";
-            console.log(this.name, `${name}:`, uiFriendlyDuration(value));
+        if (JetStreamParams.RAMification) {
+            console.log("    Current Footprint:", uiFriendlyNumber(this.currentFootprint));
+            console.log("    Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
         }
-        if (RAMification) {
-            console.log(this.name, "Current Footprint:", uiFriendlyNumber(this.currentFootprint));
-            console.log(this.name, "Peak Footprint:", uiFriendlyNumber(this.peakFootprint));
-        }
+        console.log("    Wall-Time:", uiFriendlyDuration(this.endTime - this.startTime));
     }
 };
 
@@ -1289,22 +1167,6 @@ class GroupedBenchmark extends Benchmark {
             results[subScore] = geomeanScore(results[subScore]);
         return results;
     }
-
-    subTimes() {
-        const results = {};
-
-        for (const benchmark of this.benchmarks) {
-            let times = benchmark.subTimes();
-            for (let subTime in times) {
-                results[subTime] ??= [];
-                results[subTime].push(times[subTime]);
-            }
-        }
-
-        for (let subTimes in results)
-            results[subTimes] = sum(results[subTimes]);
-        return results;
-    }
 };
 
 class DefaultBenchmark extends Benchmark {
@@ -1318,8 +1180,9 @@ class DefaultBenchmark extends Benchmark {
         this.worstScore = null;
         this.averageTime = null;
         this.averageScore = null;
-
-        console.assert(this.iterations > this.worstCaseCount);
+        if (this.worstCaseCount)
+            console.assert(this.iterations > this.worstCaseCount);
+        console.assert(this.worstCaseCount >= 0);
     }
 
     processResults(results) {
@@ -1333,29 +1196,24 @@ class DefaultBenchmark extends Benchmark {
         for (let i = 0; i + 1 < results.length; ++i)
             console.assert(results[i] >= results[i + 1]);
 
-        const worstCase = [];
-        for (let i = 0; i < this.worstCaseCount; ++i)
-            worstCase.push(results[i]);
-        this.worstTime = mean(worstCase);
-        this.worstScore = toScore(this.worstTime);
+        if (this.worstCaseCount) {
+            const worstCase = [];
+            for (let i = 0; i < this.worstCaseCount; ++i)
+                worstCase.push(results[i]);
+            this.worstTime = mean(worstCase);
+            this.worstScore = toScore(this.worstTime);
+        }
         this.averageTime = mean(results);
         this.averageScore = toScore(this.averageTime);
     }
 
     subScores() {
-        return {
-            "First": this.firstIterationScore,
-            "Worst": this.worstScore,
-            "Average": this.averageScore,
-        };
-    }
-
-    subTimes() {
-        return {
-            "First": this.firstIterationTime,
-            "Worst": this.worstTime,
-            "Average": this.averageTime,
-        };
+        const scores = { "First": this.firstIterationScore }
+        if (this.worstCaseCount)
+            scores["Worst"] = this.worstScore;
+        if (this.iterations > 1)
+            scores["Average"] = this.averageScore;
+        return scores;
     }
 }
 
@@ -1408,7 +1266,7 @@ class AsyncBenchmark extends DefaultBenchmark {
     get runnerCode() {
         return `
         async function doRun() {
-            const benchmark = new Benchmark(${this.iterations});
+            const benchmark = new Benchmark(${JSON.stringify(this.benchmarkArguments)});
             await benchmark.init?.();
             const results = [];
             const benchmarkName = "${this.name}";
@@ -1519,13 +1377,6 @@ class WSLBenchmark extends Benchmark {
             }
             top.currentResolve(results);
         }`;
-    }
-
-    subTimes() {
-        return {
-            "Stdlib": this.stdlibTime,
-            "MainRun": this.mainRunTime,
-        };
     }
 
     subScores() {
@@ -1659,24 +1510,10 @@ class WasmLegacyBenchmark extends Benchmark {
         return str;
     }
 
-    subTimes() {
-        return {
-            "Startup": this.startupTime,
-            "Runtime": this.runTime,
-        };
-    }
-
     subScores() {
         return {
             "Startup": this.startupScore,
             "Runtime": this.runScore,
-        };
-    }
-
-    subTimes() {
-        return {
-            "Startup": this.startupTime,
-            "Runtime": this.runTime,
         };
     }
 };
@@ -1924,7 +1761,7 @@ let BENCHMARKS = [
         tags: ["Default", "Octane"],
     }),
     new DefaultBenchmark({
-        name: "typescript",
+        name: "typescript-octane",
         files: [
             "./Octane/typescript-compiler.js",
             "./Octane/typescript-input.js",
@@ -1933,7 +1770,7 @@ let BENCHMARKS = [
         iterations: 15,
         worstCaseCount: 2,
         deterministicRandom: true,
-        tags: ["Default", "Octane"],
+        tags: ["Octane", "typescript"],
     }),
     // RexBench
     new DefaultBenchmark({
@@ -2135,6 +1972,19 @@ let BENCHMARKS = [
         ],
         tags: ["Default", "Proxy"],
     }),
+    new AsyncBenchmark({
+        name: "web-ssr",
+        files: [
+            "./web-ssr/benchmark.js",
+        ],
+        preload: {
+            // Debug Sources for nicer profiling.
+            // BUNDLE_BLOB: "./web-ssr/dist/bundle.js",
+            BUNDLE_BLOB: "./web-ssr/dist/bundle.min.js",
+        },
+        tags: ["Default", "web", "ssr"],
+        iterations: 30,
+    }),
     // Class fields
     new DefaultBenchmark({
         name: "raytrace-public-class-fields",
@@ -2149,6 +1999,24 @@ let BENCHMARKS = [
             "./class-fields/raytrace-private-class-fields.js",
         ],
         tags: ["Default", "ClassFields"],
+    }),
+    new AsyncBenchmark({
+        name: "typescript-lib",
+        files: [
+            "./TypeScript/src/mock/sys.js",
+            "./TypeScript/dist/bundle.js",
+            "./TypeScript/benchmark.js",
+        ],
+        preload: {
+            // Large test project:
+            // "tsconfig": "./TypeScript/src/gen/zod-medium/tsconfig.json",
+            // "files": "./TypeScript/src/gen/zod-medium/files.json",
+            "tsconfig": "./TypeScript/src/gen/immer-tiny/tsconfig.json",
+            "files": "./TypeScript/src/gen/immer-tiny/files.json",
+        },
+        iterations: 1,
+        worstCaseCount: 0,
+        tags: ["Default", "typescript"],
     }),
     // Generators
     new AsyncBenchmark({
@@ -2210,18 +2078,6 @@ let BENCHMARKS = [
         tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
-        name: "tsf-wasm",
-        files: [
-            "./wasm/TSF/build/tsf.js",
-            "./wasm/TSF/benchmark.js",
-        ],
-        preload: {
-            wasmBinary: "./wasm/TSF/build/tsf.wasm",
-        },
-        iterations: 50,
-        tags: ["Default", "Wasm"],
-    }),
-    new WasmEMCCBenchmark({
         name: "quicksort-wasm",
         files: [
             "./wasm/quicksort/build/quicksort.js",
@@ -2231,7 +2087,9 @@ let BENCHMARKS = [
             wasmBinary: "./wasm/quicksort/build/quicksort.wasm",
         },
         iterations: 50,
-        tags: ["Default", "Wasm"],
+        // No longer run by-default: We have more realistic Wasm workloads by
+        // now, and it was a small microbenchmark.
+        tags: ["Wasm"],
     }),
     new WasmEMCCBenchmark({
         name: "gcc-loops-wasm",
@@ -2241,6 +2099,20 @@ let BENCHMARKS = [
         ],
         preload: {
             wasmBinary: "./wasm/gcc-loops/build/gcc-loops.wasm",
+        },
+        iterations: 50,
+        // No longer run by-default: We have more realistic Wasm workloads by
+        // now, and it was a small microbenchmark.
+        tags: ["Wasm"],
+    }),
+    new WasmEMCCBenchmark({
+        name: "tsf-wasm",
+        files: [
+            "./wasm/TSF/build/tsf.js",
+            "./wasm/TSF/benchmark.js",
+        ],
+        preload: {
+            wasmBinary: "./wasm/TSF/build/tsf.wasm",
         },
         iterations: 50,
         tags: ["Default", "Wasm"],
@@ -2279,19 +2151,6 @@ let BENCHMARKS = [
         preload: {
             jsModule: "./Dart/build/flute.complex.dart2wasm.mjs",
             wasmBinary: "./Dart/build/flute.complex.dart2wasm.wasm",
-        },
-        iterations: 30,
-        worstCaseCount: 2,
-        tags: ["Wasm"],
-    }),
-    new WasmEMCCBenchmark({
-        name: "Dart-flute-wasm",
-        files: [
-            "./Dart/benchmark.js",
-        ],
-        preload: {
-            jsModule: "./Dart/build/flute.dart2wasm.mjs",
-            wasmBinary: "./Dart/build/flute.dart2wasm.wasm",
         },
         iterations: 15,
         worstCaseCount: 2,
@@ -2334,6 +2193,56 @@ let BENCHMARKS = [
         iterations: 15,
         worstCaseCount: 2,
         tags: ["Default", "Wasm"],
+    }),
+    new AsyncBenchmark({
+        name: "transformersjs-bert-wasm",
+        files: [
+            "./polyfills/fast-text-encoding/1.0.3/text.js",
+            "./transformersjs/benchmark.js",
+            "./transformersjs/task-bert.js",
+        ],
+        preload: {
+            transformersJsModule: "./transformersjs/build/transformers.js",
+            
+            onnxJsModule: "./transformersjs/build/onnxruntime-web/ort-wasm-simd-threaded.mjs",
+            onnxWasmBinary: "./transformersjs/build/onnxruntime-web/ort-wasm-simd-threaded.wasm",
+
+            modelWeights: "./transformersjs/build/models/Xenova/distilbert-base-uncased-finetuned-sst-2-english/onnx/model_uint8.onnx",
+            modelConfig: "./transformersjs/build/models/Xenova/distilbert-base-uncased-finetuned-sst-2-english/config.json",
+            modelTokenizer: "./transformersjs/build/models/Xenova/distilbert-base-uncased-finetuned-sst-2-english/tokenizer.json",
+            modelTokenizerConfig: "./transformersjs/build/models/Xenova/distilbert-base-uncased-finetuned-sst-2-english/tokenizer_config.json",
+        },
+        iterations: 30,
+        allowUtf16: true,
+        tags: ["Default", "Wasm", "transformersjs"],
+    }),
+    new AsyncBenchmark({
+        name: "transformersjs-whisper-wasm",
+        files: [
+            "./polyfills/fast-text-encoding/1.0.3/text.js",
+            "./transformersjs/benchmark.js",
+            "./transformersjs/task-whisper.js",
+        ],
+        preload: {
+            transformersJsModule: "./transformersjs/build/transformers.js",
+            
+            onnxJsModule: "./transformersjs/build/onnxruntime-web/ort-wasm-simd-threaded.mjs",
+            onnxWasmBinary: "./transformersjs/build/onnxruntime-web/ort-wasm-simd-threaded.wasm",
+
+            modelEncoderWeights: "./transformersjs/build/models/Xenova/whisper-tiny.en/onnx/encoder_model_quantized.onnx",
+            modelDecoderWeights: "./transformersjs/build/models/Xenova/whisper-tiny.en/onnx/decoder_model_merged_quantized.onnx",
+            modelConfig: "./transformersjs/build/models/Xenova/whisper-tiny.en/config.json",
+            modelTokenizer: "./transformersjs/build/models/Xenova/whisper-tiny.en/tokenizer.json",
+            modelTokenizerConfig: "./transformersjs/build/models/Xenova/whisper-tiny.en/tokenizer_config.json",
+            modelPreprocessorConfig: "./transformersjs/build/models/Xenova/whisper-tiny.en/preprocessor_config.json",
+            modelGenerationConfig: "./transformersjs/build/models/Xenova/whisper-tiny.en/generation_config.json",
+
+            inputFile: "./transformersjs/build/inputs/jfk.raw",
+        },
+        iterations: 5,
+        worstCaseCount: 1,
+        allowUtf16: true,
+        tags: ["Default", "Wasm", "transformersjs"],
     }),
     new WasmLegacyBenchmark({
         name: "tfjs-wasm",
@@ -2651,7 +2560,51 @@ let BENCHMARKS = [
         worstCaseCount: 2,
         tags: ["Default", "Wasm", "dotnet"],
     }),
+    // J2CL
+    new AsyncBenchmark({
+        name: "j2cl-box2d-wasm",
+        files: [
+            "./wasm/j2cl-box2d/benchmark.js",
+            "./wasm/j2cl-box2d/build/Box2dBenchmark_j2wasm_entry.js",
+        ],
+        preload: {
+            wasmBinary: "./wasm/j2cl-box2d/build/Box2dBenchmark_j2wasm_binary.wasm",
+        },
+        iterations: 40,
+        tags: ["Default", "Wasm"],
+    }),
 ];
+
+
+const INTL_TESTS = [
+    "DateTimeFormat",
+    "ListFormat",
+    "RelativeTimeFormat",
+    "NumberFormat",
+    "PluralRules",
+];
+const INTL_BENCHMARKS = [];
+for (const test of INTL_TESTS) {
+    const benchmark = new AsyncBenchmark({
+        name: `${test}-intl`,
+        files: [
+            "./intl/src/helper.js",
+            `./intl/src/${test}.js`,
+            "./intl/benchmark.js",
+        ],
+        iterations: 2,
+        worstCaseCount: 1,
+        deterministicRandom: true,
+        tags: ["Javascript", "intl"],
+    });
+    INTL_BENCHMARKS.push(benchmark);
+}
+BENCHMARKS.push(
+    new GroupedBenchmark({
+            name: "intl",
+            tags: ["Javascript", "intl"],
+        }, INTL_BENCHMARKS));
+
 
 
 // SunSpider tests
@@ -2821,8 +2774,8 @@ const defaultDisabledTags = [];
 if (!isInBrowser)
     defaultDisabledTags.push("WorkerTests");
 
-if (globalThis.testList?.length) {
-    benchmarks = processTestList(globalThis.testList);
+if (JetStreamParams.testList.length) {
+    benchmarks = processTestList(JetStreamParams.testList);
 } else {
     benchmarks = findBenchmarksByTag("Default", defaultDisabledTags)
 }
