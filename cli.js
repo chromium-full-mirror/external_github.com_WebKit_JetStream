@@ -21,7 +21,7 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
- */
+  */
 
 load("./shell-config.js");
 
@@ -68,7 +68,7 @@ const CLI_PARAMS = {
     help: "Start the benchmark automatically.",
     param: "startAutomatically",
   },
-  report: { help: "Report results to a server.", param: "shouldReport" },
+  report: { help: "Report results to a server.", param: "report" },
   "start-delay": {
     help: "Delay before starting the benchmark.",
     param: "startDelay",
