@@ -59,11 +59,7 @@ body {
     font-size: 1.6rem;
     font-weight: 400;
     line-height: 1.4;
-    background-repeat: no-repeat;
-    background-position: center -5vw;
-    background-size: 100vw;
     padding-bottom: 0px;
-    background-image: url('clouds.svg');
     overflow-y: hidden;
     height: 100%;
 }
@@ -117,16 +113,10 @@ img {
     background-position: center;
     background-image: url('JetStream3Logo.svg');
     color: transparent;
-    animation: swingin 350ms ease-out forwards;
-    will-change: transform, opacity;
     height: 75px;
 }
 
 #jetstreams {
-    background-image: url('jetstreams.svg');
-    background-repeat: no-repeat;
-    background-size: contain;
-    background-position: center;
     padding: 2rem 0;
     margin: -2rem 0;
 }
