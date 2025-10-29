@@ -1,10 +1,33 @@
+// Copyright (C) 2007-2025 Apple Inc. All rights reserved.
+
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//  notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//  notice, this list of conditions and the following disclaimer in the
+//  documentation and/or other materials provided with the distribution.
+
+// THIS SOFTWARE IS PROVIDED BY APPLE INC. AND ITS CONTRIBUTORS ``AS IS''
+// AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+// THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+// PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR ITS CONTRIBUTORS
+// BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+// INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+// CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+// ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+// THE POSSIBILITY OF SUCH DAMAGE.
+
+
 import commandLineArgs from 'command-line-args';
 import commandLineUsage from 'command-line-usage';
-import { globSync, globIterate } from 'glob';
+import { globSync } from 'glob';
 import zlib from 'zlib';
 import fs from 'fs';
 import path from 'path';
-
 
 let log = console.log
 
@@ -13,7 +36,7 @@ function parseCommandLineArgs() {
         { name: 'decompress', alias: 'd', type: Boolean, description: 'Decompress files (default: compress).' },
         { name: 'keep', alias: 'k', type: Boolean, description: 'Keep input files after processing (default: delete).' },
         { name: 'help', alias: 'h', type: Boolean, description: 'Print this usage guide.' },
-        { name: 'quiet', alias: 'q', type: Boolean, description: 'Quite output, only print errors.' },
+         { name: 'quiet', alias: 'q', type: Boolean, description: 'Quite output, only print errors.' },
         { name: 'globs', type: String, multiple: true, defaultOption: true, description: 'Glob patterns of files to process.' },
     ];
     const options = commandLineArgs(optionDefinitions);
@@ -52,7 +75,6 @@ function parseCommandLineArgs() {
             process.exit(1);
         }
     }
-
     return options;
 }
 
@@ -90,32 +112,29 @@ function decompress(inputData) {
     return decompressedData;
 }
 
-async function* globsToFiles(globs) {
-    let files = new Set();
-    console.assert(globs.length > 0);
+function globsToFiles(globs) {
+    let files = [];
+    console.assert(globs.length > 0) ;
     const globtions =  { nodir: true, ignore: '**/node_modules/**' };
     for (const glob of globs) {
-        for await (const file of globIterate(glob, globtions)) {
-            if (files.has(file))
-                continue;
-            files.add(file)
-            yield file;
-        }
+        const matches = globSync(glob, globtions);
+        files = files.concat(matches);
     }
+    files = Array.from(new Set(files)).sort();
+    return files;
 }
 
-async function processFiles(filesGenerator, isDecompress, keep) {
+function processFiles(files, isDecompress, keep) {
     const verb = isDecompress ? 'decompress' : 'compress';
-    const files = [];
+    log(`Found ${files.length} files to ${verb}` + (files.length ? ':' : '.'));
 
     // For printing overall statistics at the end.
     let totalInputSize = 0;
     let totalOutputSize = 0;
 
-    for await (const inputFilename of filesGenerator) {
-        files.push(inputFilename);
+    for (const inputFilename of files) {
         try {
-            log(inputFilename);
+            console.log(inputFilename);
             let outputFilename;
             if (isDecompress) {
                 if (path.extname(inputFilename) !== '.z') {
@@ -151,7 +170,6 @@ async function processFiles(filesGenerator, isDecompress, keep) {
     }
 
     if (files.length > 1) {
-        log(`Found ${files.length} files to ${verb}` + (files.length ? ':' : '.'));
         if (isDecompress) {
             const totalExpansionRatio = calculateExpansionRatio(totalInputSize, totalOutputSize);
             log(`Total compressed sizes:   ${String(totalInputSize).padStart(9)} bytes`);

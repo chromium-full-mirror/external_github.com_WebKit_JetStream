@@ -59,10 +59,72 @@ body {
     font-size: 1.6rem;
     font-weight: 400;
     line-height: 1.4;
+    background-repeat: no-repeat;
+    background-position: center -5vw;
+    background-size: 100vw;
     padding-bottom: 0px;
+    background-image: url('clouds.svg');
     overflow-y: hidden;
     height: 100%;
 }
+
+table {
+    border-spacing: 0;
+}
+
+body.nonDefaultParams {
+    filter: hue-rotate(152deg);
+}
+
+.nonDefaultParams .summary {
+    display: none;
+}
+
+#non-default-params {
+    display: none;
+    text-align: center;
+
+    & h2 {
+        text-align: center;
+    } 
+
+    & p {
+        text-align: center;
+    }
+}
+
+.nonDefaultParams #non-default-params {
+    display: block;
+}
+
+#non-standard-params-table {
+    border-collapse: collapse;
+    text-align: left;
+    display: inline-block;
+    margin-top: var(--gap);
+}
+
+#non-standard-params-table tr {
+    padding: 2px;
+}
+
+#non-standard-params-table thead th {
+    border-bottom: 1px solid var(--foreground);
+}
+
+#non-standard-params-table tbody td {
+    font-weight: normal;
+    text-align: left;
+}
+
+#non-standard-params-table thead th,
+#non-standard-params-table tbody td {
+    padding: 0.1em 0.3em;
+}
+#non-standard-params-table tbody td:nth-child(2) {
+    color: var(--highlight);
+}
+
 
 .overflow-scroll {
     overflow-y: auto;
@@ -113,10 +175,16 @@ img {
     background-position: center;
     background-image: url('JetStream3Logo.svg');
     color: transparent;
+    animation: swingin 350ms ease-out forwards;
+    will-change: transform, opacity;
     height: 75px;
 }
 
 #jetstreams {
+    background-image: url('jetstreams.svg');
+    background-repeat: no-repeat;
+    background-size: contain;
+    background-position: center;
     padding: 2rem 0;
     margin: -2rem 0;
 }

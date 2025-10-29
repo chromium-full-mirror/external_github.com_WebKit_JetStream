@@ -21,27 +21,27 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
-  */
+ */
 
-load("./shell-config.js");
+load("./utils/shell-config.js");
 
 const CLI_PARAMS = {
   __proto__: null,
   help: { help: "Print this help message.", param: "help" },
   "iteration-count": {
     help: "Set the default iteration count.",
-    param: "iterationCount",
+    param: "testIterationCount",
   },
   "worst-case-count": {
     help: "Set the default worst-case count.",
-    param: "worstCaseCount",
+    param: "testWorstCaseCount",
   },
   "dump-json-results": {
     help: "Print summary json to the console.",
     param: "dumpJSONResults",
   },
   "dump-test-list": {
-    help: "Print test list instead of running.",
+    help: "Print the selected test list instead of running.",
     param: "dumpTestList",
   },
   ramification: {
@@ -120,7 +120,7 @@ if (cliArgs.length) {
 if (cliParams.size) 
     globalThis.JetStreamParamsSource = cliParams;
 
-load("./params.js");
+load("./utils/params.js");
 
 
 async function runJetStream() {
