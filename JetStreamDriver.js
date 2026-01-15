@@ -49,11 +49,6 @@ if (typeof testWorstCaseCountMap === "undefined")
 if (typeof dumpJSONResults === "undefined")
     var dumpJSONResults = false;
 
-function idleHint(benchmarkName, iteration) {
-    // Insert your favorite code here.
-}
-globalThis.idleHint = idleHint;
-
 let shouldReport = false;
 let customTestList = [];
 if (typeof(URLSearchParams) !== "undefined") {
@@ -605,7 +600,6 @@ class Benchmark {
                 performanceMeasure(iterationMarkLabel, iterationStartMark);
 
                 results.push(Math.max(1, end - start));
-                top.idleHint(benchmarkName, i);
             }
             if (__benchmark.validate)
                 __benchmark.validate(${this.iterations});
@@ -1102,7 +1096,6 @@ class AsyncBenchmark extends DefaultBenchmark {
                 performanceMeasure(iterationMarkLabel, iterationStartMark);
 
                 results.push(Math.max(1, end - start));
-                top.idleHint(benchmarkName, i);
             }
             if (__benchmark.validate)
                 __benchmark.validate(${this.iterations});
@@ -1152,8 +1145,6 @@ class WSLBenchmark extends Benchmark {
 
                 performanceMeasure(markLabel, startMark);
             }
-
-            top.idleHint("${this.name}", 0);
 
             {
                 const markLabel = "${this.name}-mainRun";

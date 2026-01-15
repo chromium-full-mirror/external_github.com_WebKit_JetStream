@@ -587,7 +587,7 @@ function integrateWasmJS() {
    }))
    .then((...args) => {
        reportCompileTime(benchmarkTime() - __startupStartTime);
-       performanceMeasure("HashSet-wasm-startup", __startupMark);
+       performanceMeasure("richards-wasm-startup", __startupMark);
        return Promise.resolve(...args);
    })
    .then(receiver).catch((function(reason) {
