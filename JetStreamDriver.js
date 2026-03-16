@@ -68,6 +68,8 @@ if (typeof(URLSearchParams) !== "undefined") {
 }
 
 function performanceMeasure(name, mark) {
+    // Not implemented in JSC.
+    if (mark === undefined) return;
     // D8 does not implement the official web-api
     if (globalThis.isD8)
         performance.measure(name, mark);
@@ -662,6 +664,8 @@ class Benchmark {
               performance.measure = function(){};
             }
             function performanceMeasure(name, mark) {
+                // Not implemented in JSC.
+                if (mark === undefined) return;
                 // D8 does not implement the official web-api
                 if (isD8)
                     performance.measure(name, mark);
