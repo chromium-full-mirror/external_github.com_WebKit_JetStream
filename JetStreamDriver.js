@@ -250,6 +250,7 @@ class Driver {
         this.counter.loadedResources = 0;
         this.counter.totalResources = 0;
         this.counter.failedPreloadResources = 0;
+        this.totalWallTime = 0;
     }
 
     addPlan(plan, BenchmarkClass = DefaultBenchmark) {
@@ -283,6 +284,7 @@ class Driver {
             }
 
             benchmark.updateUIAfterRun();
+            this.totalWallTime += (benchmark.endTime - benchmark.startTime);
 
             if (isInBrowser) {
                 let cache = JetStream.blobDataCache;
@@ -353,6 +355,7 @@ class Driver {
             console.log("\nTotals:");
             console.log("    Total-Time:", uiFriendlyDuration(geomean(allTimes)));
             console.log("    Total-Score:", uiFriendlyNumber(geomean(allScores)));
+            console.log("    Total-Wall-Time:", uiFriendlyDuration(this.totalWallTime));
         }
 
         this.reportScoreToRunBenchmarkRunner();
