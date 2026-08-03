@@ -60,6 +60,10 @@ const CLI_PARAMS = {
     help: "Run a specific test or comma-separated list of tests.",
     param: "test",
   },
+  exclude: {
+    help: "Exclude a specific test or comma-separated list of tests.",
+    param: "exclude",
+  },
   tag: {
     help: "Run tests with a specific tag or comma-separated list of tags.",
     param: "tag",
